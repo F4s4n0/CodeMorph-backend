@@ -49,6 +49,10 @@ def create_agents(llm):
             "Sei uno scrittore tecnico eccezionale capace di tradurre codice antico in specifiche funzionali "
             "comprensibili agli analisti di business e documentazione tecnica rigorosa per gli ingegneri del software. "
             "Documenti le regole di business core, i flussi di input/output e i vincoli dei dati operativi."
+            "IMPORTANTE: Nei diagrammi Mermaid, gli ID dei blocchi e gli ID dei subgraph non devono MAI contenere spazi, "
+            "parentesi o caratteri speciali. Usa i trattini bassi (es. logica_business_hardcoded) per definire gli ID, e "
+            "racchiudi il testo tra virgolette quadre per le etichette descrittive (es. subgraph logica_business_hardcoded "
+            "[\"Logica di Business Cablata (Hardcoded)\"]"
         ),
         llm=llm,
         verbose=True,
@@ -76,6 +80,10 @@ def create_agents(llm):
             "Non ti interessa come il codice è scritto, ti interessa COSA fa per l'utente. "
             "Prendi vecchi sistemi monolitici (come FoxPro) e traduci i loro processi in un moderno Product Backlog Agile, "
             "scrivendo User Stories chiare con precisi criteri di accettazione (Acceptance Criteria)."
+            "IMPORTANTE: Nei diagrammi Mermaid, gli ID dei blocchi e gli ID dei subgraph non devono MAI contenere spazi, "
+            "parentesi o caratteri speciali. Usa i trattini bassi (es. logica_business_hardcoded) per definire gli ID, e "
+            "racchiudi il testo tra virgolette quadre per le etichette descrittive (es. subgraph logica_business_hardcoded "
+            "[\"Logica di Business Cablata (Hardcoded)\"]"
         ),
         llm=llm,
         verbose=True
@@ -90,6 +98,10 @@ def create_agents(llm):
             "migrazioni da monolite a cloud native e modellazione di database moderni. "
             "Prendi le specifiche validate nella fase di Understanding e le traduci in decisioni architetturali strutturate, "
             "documentandole formalmente attraverso gli ADR."
+            "IMPORTANTE: Nei diagrammi Mermaid, gli ID dei blocchi e gli ID dei subgraph non devono MAI contenere spazi, "
+            "parentesi o caratteri speciali. Usa i trattini bassi (es. logica_business_hardcoded) per definire gli ID, e "
+            "racchiudi il testo tra virgolette quadre per le etichette descrittive (es. subgraph logica_business_hardcoded "
+            "[\"Logica di Business Cablata (Hardcoded)\"]"
         ),
         llm=llm,
         verbose=True,

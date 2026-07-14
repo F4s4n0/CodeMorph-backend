@@ -16,7 +16,7 @@ from auth import get_current_user_and_validate_license
 load_dotenv()
 
 # Legge il percorso dal .env. Se non lo trova, crea una cartella "workspace" locale di fallback
-WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", "workspace"))
+WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", "/tmp/workspace_sessioni"))
 
 # Crea la cartella principale sul tuo disco se non esiste ancora
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
