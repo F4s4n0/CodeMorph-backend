@@ -653,27 +653,44 @@ def admin_ottieni_tutti_gli_utenti(user_id: str = Depends(require_admin)):
 
 
 @app.get("/api/v1/admin/sessions")
-def admin_ottieni_tutte_le_sessioni(user_id: str = Depends(require_admin)):
+def admin_ottieni_tutte_le_sessioni(user_id: str = Depends(get_current_user_and_validate_license)):
     try:
-        risposta = (
-            supabase.table("migration_sessions")
-            .select("*")
-            .order("updated_at", desc=True)
-            .execute()
-        )
+        utente = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
+        is_admin = utente.data and utente.data.get("role") == "admin"
+
+        if is_admin:
+            # L'admin vede tutto il database
+            risposta = supabase.table("migration_sessions").select("*").order("updated_at", desc=True).execute()
+        else:
+            # L'utente vede solo la sua roba
+            risposta = supabase.table("migration_sessions").select("*").eq("user_id", user_id).order("updated_at", desc=True).execute()
+            
         return risposta.data
     except Exception as e:
-        logger.error("Errore admin recupero sessioni: %s", e)
-        raise HTTPException(status_code=500, detail="Errore admin nel recupero sessioni.")
+        logger.error("Errore recupero sessioni: %s", e)
+        raise HTTPException(status_code=500, detail="Errore nel recupero sessioni.")
 
 
 @app.delete("/api/v1/admin/sessions/{session_id}")
-def admin_cancella_sessione(session_id: str, user_id: str = Depends(require_admin)):
-    # La validazione qui è CRITICA: senza, un session_id come '../..'
-    # farebbe puntare shutil.rmtree fuori dal workspace.
+def admin_cancella_sessione(session_id: str, user_id: str = Depends(get_current_user_and_validate_license)):
     session_id = _valida_session_id(session_id)
 
-    # 1. Pulizia del filesystem (cartella di lavoro + ZIP)
+    # 1. Controllo permessi
+    try:
+        utente = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
+        is_admin = utente.data and utente.data.get("role") == "admin"
+
+        if not is_admin:
+            # Se non è admin, usa la funzione già esistente che blocca con 403 se l'ID non è suo
+            _verifica_proprieta_sessione(session_id, user_id)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Errore verifica permessi per cancellazione: %s", e)
+        raise HTTPException(status_code=500, detail="Errore durante la verifica dei permessi.")
+
+    # 2. Pulizia del filesystem (cartella di lavoro + ZIP)
     cartella_sessione = WORKSPACE_DIR / session_id
     try:
         if cartella_sessione.exists() and cartella_sessione.is_dir():
@@ -686,10 +703,9 @@ def admin_cancella_sessione(session_id: str, user_id: str = Depends(require_admi
                 zip_path.unlink()
                 logger.info("Archivio ZIP rimosso: %s", zip_path)
     except Exception as e:
-        # Errore filesystem loggato ma non bloccante, per non lasciare il DB disallineato
         logger.warning("Errore parziale rimozione file di %s: %s", session_id, e)
 
-    # 2. Cancellazione record su Supabase
+    # 3. Cancellazione record su Supabase
     try:
         supabase.table("migration_sessions").delete().eq("id", session_id).execute()
         return {
