@@ -18,6 +18,7 @@ from src.config import (
     FILE_QUALITY_REPORT,
     QA_CHUNK_MAX_CHARS,
 )
+from src.live_log import crea_logger_attivita, log_message
 from src.tasks import (
     get_understanding_tasks,
     get_design_tasks,
@@ -82,15 +83,21 @@ def _chunk_text(text, max_chars):
 # FASE 1 - UNDERSTANDING
 # =====================================================================
 
-def run_understanding_phase(llm, codice_legacy, output_dir):
+def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tracker=None):
     """
     Esegue la FASE 1: Understanding.
     Crea l'inventario, la mappa delle dipendenze, la documentazione e il test book.
+
+    `session_id` attiva il log live dell'attività REALE degli agenti
+    (via callback CrewAI); `tracker` accumula i token consumati.
     """
     os.makedirs(output_dir, exist_ok=True)
 
     agents = create_agents(llm)
     tasks = get_understanding_tasks(agents, output_dir)
+    annuncia_avvio, task_callback = crea_logger_attivita(
+        session_id, tasks, etichetta="Fase 1 · Understanding"
+    )
 
     # Selezioniamo solo gli agenti necessari per questa fase
     fase1_agents = [
@@ -107,16 +114,21 @@ def run_understanding_phase(llm, codice_legacy, output_dir):
         process=Process.sequential,
         verbose=True,
         memory=False,  # Disattivato per evitare errori di fuso orario/database locale
+        task_callback=task_callback,  # Log live sincronizzato con l'attività reale
     )
 
-    return crew.kickoff(inputs={"codice_legacy": codice_legacy})
+    annuncia_avvio()
+    risultato = crew.kickoff(inputs={"codice_legacy": codice_legacy})
+    if tracker is not None:
+        tracker.aggiungi_crew(crew, risultato)
+    return risultato
 
 
 # =====================================================================
 # FASE 2 - DESIGN
 # =====================================================================
 
-def run_design_phase(llm, linguaggio_target, output_dir):
+def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracker=None):
     """
     Esegue la FASE 2: Design.
     Rilegge da disco i documenti validati della fase 1 (le Crew sono isolate
@@ -136,6 +148,9 @@ def run_design_phase(llm, linguaggio_target, output_dir):
 
     agents = create_agents(llm)
     tasks = get_design_tasks(agents, output_dir, contesto_fase1=contesto_fase1)
+    annuncia_avvio, task_callback = crea_logger_attivita(
+        session_id, tasks, etichetta="Fase 2 · Design"
+    )
 
     crew = Crew(
         agents=[
@@ -146,22 +161,37 @@ def run_design_phase(llm, linguaggio_target, output_dir):
         process=Process.sequential,
         verbose=True,
         memory=False,
+        task_callback=task_callback,  # Log live sincronizzato con l'attività reale
     )
 
-    return crew.kickoff(inputs={"linguaggio_target": linguaggio_target})
+    annuncia_avvio()
+    risultato = crew.kickoff(inputs={"linguaggio_target": linguaggio_target})
+    if tracker is not None:
+        tracker.aggiungi_crew(crew, risultato)
+    return risultato
 
 
 # =====================================================================
 # FASE 3 - IMPLEMENTATION (iterativa) + QUALITY CHECK
 # =====================================================================
 
-def run_implementation_phase(llm, linguaggio_target, output_dir, lista_file_legacy_estratti):
+def run_implementation_phase(
+    llm,
+    linguaggio_target,
+    output_dir,
+    lista_file_legacy_estratti,
+    session_id=None,
+    tracker=None,
+):
     """
     Esegue la FASE 3: per ogni file legacy genera backend e frontend target,
     poi lancia il Quality Check finale sul codice prodotto.
 
     Ritorna un dizionario con l'esito per file e il verdetto QA, così il
     chiamante può loggare/notificare senza dover rileggere i file da disco.
+
+    `session_id` attiva il log live per file e per task (attività reale);
+    `tracker` accumula i token consumati da tutte le crew della fase.
     """
     os.makedirs(output_dir, exist_ok=True)
     agents = create_agents(llm)
@@ -185,15 +215,25 @@ def run_implementation_phase(llm, linguaggio_target, output_dir, lista_file_lega
         logger.info(
             "Resume: %d file già processati verranno saltati.", len(processati)
         )
+        log_message(
+            session_id,
+            f"⏭️ Resume: {len(processati)} file già processati in una run precedente verranno saltati.",
+        )
 
     esiti = {"completati": [], "falliti": [], "saltati": []}
+    totale = len(lista_file_legacy_estratti)
+    log_message(
+        session_id,
+        f"⚙️ Fase 3: {totale} file legacy in coda di migrazione verso {linguaggio_target}.",
+    )
 
     # 3. IL CICLO ITERATIVO: un file legacy alla volta
-    for file_info in lista_file_legacy_estratti:
+    for indice, file_info in enumerate(lista_file_legacy_estratti, start=1):
         nome_file = file_info["nome"]
 
         if nome_file in processati:
             logger.info("Salto %s: già processato in una run precedente.", nome_file)
+            log_message(session_id, f"⏭️ ({indice}/{totale}) Salto {nome_file}: già processato.")
             esiti["saltati"].append(nome_file)
             continue
 
@@ -206,17 +246,27 @@ def run_implementation_phase(llm, linguaggio_target, output_dir, lista_file_lega
             contesto_sql=contesto_sql,
         )
 
+        annuncia_avvio, task_callback = crea_logger_attivita(
+            session_id,
+            impl_tasks.as_list(),
+            etichetta=f"file {indice}/{totale}: {nome_file}",
+        )
         dev_crew = Crew(
             agents=[agents["senior_migration_developer"], agents["frontend_developer"]],
             tasks=impl_tasks.as_list(),
             process=Process.sequential,
             verbose=False,  # Silenzioso per non inondare la console
             memory=False,
+            task_callback=task_callback,  # Il log live segue il lavoro reale sul file
         )
 
         try:
             logger.info("Migrazione di %s in corso...", nome_file)
+            log_message(session_id, f"📦 ({indice}/{totale}) Migrazione di {nome_file} avviata...")
+            annuncia_avvio()
             dev_crew.kickoff()
+            if tracker is not None:
+                tracker.aggiungi_crew(dev_crew)
 
             # Accesso NOMINATO agli output: niente più tasks[0]/tasks[1]
             output_backend = _task_output_text(impl_tasks.backend)
@@ -234,11 +284,19 @@ def run_implementation_phase(llm, linguaggio_target, output_dir, lista_file_lega
             processati.add(nome_file)
             _save_checkpoint(percorso_checkpoint, processati)
             esiti["completati"].append(nome_file)
+            log_message(
+                session_id,
+                f"✅ ({indice}/{totale}) {nome_file} migrato e salvato nei file di implementazione.",
+            )
 
         except Exception:
             # Un fallimento su un file (rate limit, timeout, errore LLM) non deve
             # bruciare il lavoro fatto sugli altri: logga e prosegui.
             logger.exception("Errore durante la migrazione di %s — proseguo.", nome_file)
+            log_message(
+                session_id,
+                f"❌ Migrazione di {nome_file} fallita — proseguo con il file successivo.",
+            )
             esiti["falliti"].append(nome_file)
 
     # 4. QUALITY CHECK finale, a blocchi per non saturare la context window
@@ -251,6 +309,11 @@ def run_implementation_phase(llm, linguaggio_target, output_dir, lista_file_lega
 
     chunks = _chunk_text(codice_completo, QA_CHUNK_MAX_CHARS)
     report_qa = []
+    log_message(
+        session_id,
+        "🕵️ Avvio Quality Check (OWASP/SonarQube) sul codice generato"
+        + (f" in {len(chunks)} parti..." if len(chunks) > 1 else "..."),
+    )
 
     for i, chunk in enumerate(chunks, start=1):
         etichetta = f"parte {i}/{len(chunks)}" if len(chunks) > 1 else ""
@@ -267,20 +330,33 @@ def run_implementation_phase(llm, linguaggio_target, output_dir, lista_file_lega
             chunk_label=etichetta,
             output_filename=nome_report,
         )
+        annuncia_qa, callback_qa = crea_logger_attivita(
+            session_id, qa_tasks, etichetta=f"Quality Check {etichetta}".strip()
+        )
         qa_crew = Crew(
             agents=[agents["security_quality_reviewer"]],
             tasks=qa_tasks,
             process=Process.sequential,
             verbose=True,
             memory=False,
+            task_callback=callback_qa,
         )
 
         try:
+            annuncia_qa()
             risultato = qa_crew.kickoff()
+            if tracker is not None:
+                tracker.aggiungi_crew(qa_crew, risultato)
             report_qa.append(getattr(risultato, "raw", None) or str(risultato))
         except Exception:
             logger.exception("Errore durante il Quality Check (%s).", etichetta or "unico")
+            log_message(session_id, f"❌ Quality Check fallito ({etichetta or 'unico'}).")
             report_qa.append(f"QUALITY CHECK FALLITO ({etichetta or 'unico'})")
 
     esiti["quality_report"] = "\n\n---\n\n".join(report_qa)
+    log_message(
+        session_id,
+        f"📈 Fase 3: pipeline completata — {len(esiti['completati'])} migrati, "
+        f"{len(esiti['falliti'])} falliti, {len(esiti['saltati'])} saltati.",
+    )
     return esiti

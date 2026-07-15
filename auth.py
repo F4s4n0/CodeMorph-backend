@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import jwt
 from dotenv import load_dotenv
-from fastapi import HTTPException, Security
+from fastapi import Depends, HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
 
@@ -53,9 +53,15 @@ def _parse_expiry(expires_at_str):
     return expires_at
 
 
-def get_current_user_and_validate_license(
+def get_current_user(
     credentials: HTTPAuthorizationCredentials = Security(security),
-):
+) -> str:
+    """
+    Autentica il JWT di Supabase e restituisce lo user_id SENZA verificare
+    la licenza. Serve agli endpoint di pagamento: un utente senza licenza
+    (o con pass scaduto) deve comunque poter acquistare il pass giornaliero
+    o ricaricare i token — col controllo licenza sarebbe un circolo vizioso.
+    """
     token = credentials.credentials
     try:
         # 1. Decodifica del JWT generato da Supabase Auth
@@ -80,6 +86,10 @@ def get_current_user_and_validate_license(
     if not user_id:
         raise HTTPException(status_code=401, detail="Token non valido: user_id mancante.")
 
+    return user_id
+
+
+def get_current_user_and_validate_license(user_id: str = Depends(get_current_user)):
     # 2. Controllo licenza sul database Supabase.
     #    Ordiniamo per scadenza decrescente: se l'utente ha rinnovato più volte
     #    e ha più righe, conta la licenza PIÙ RECENTE, non la prima trovata.

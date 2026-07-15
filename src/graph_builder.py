@@ -5,6 +5,11 @@ import networkx as nx
 from crewai import Agent, Task, Crew
 from dbfread import DBF  # Libreria nativa per FoxPro
 
+# log_message vive ora in src/live_log.py (stessa cartella di scrittura e
+# lettura dei log live). L'import resta qui anche come re-export per il
+# codice esistente che lo importava da questo modulo.
+from src.live_log import log_message
+
 # --- LISTE DI FILTRAGGIO ---
 ESCLUDI_CARTELLE = {
     '.git', 'node_modules', 'vendor', 'venv', 'env', '__pycache__',
@@ -93,10 +98,13 @@ def extract_foxpro_dbf_schema(file_path):
 # Estrazione dipendenze via micro-agente
 # =====================================================================
 
-def extract_dependencies_from_file(file_name, file_content, llm):
+def extract_dependencies_from_file(file_name, file_content, llm, tracker=None):
     """
     Usa un agente 'micro' per leggere il contenuto (codice o schema)
     e restituire un JSON strutturato con le dipendenze.
+
+    `tracker` (TokenUsageTracker) accumula anche i token consumati da
+    questi micro-agenti: senza, il conteggio della Fase 1 sarebbe monco.
     """
     extractor_agent = Agent(
         role='Dependency Extractor',
@@ -134,6 +142,9 @@ def extract_dependencies_from_file(file_name, file_content, llm):
     )
     result = crew.kickoff()
 
+    if tracker is not None:
+        tracker.aggiungi_crew(crew, result)
+
     # Compatibilità tra versioni CrewAI: result.raw può non esistere
     testo_grezzo = getattr(result, "raw", None) or str(result)
     testo_pulito = testo_grezzo.replace('```json', '').replace('```', '').strip()
@@ -149,20 +160,6 @@ def extract_dependencies_from_file(file_name, file_content, llm):
         return dati
     except (json.JSONDecodeError, ValueError):
         return {"file": file_name, "depends_on": []}
-
-
-# =====================================================================
-# Logging live per il frontend
-# =====================================================================
-
-def log_message(session_id, message, workspace_root="workspace"):
-    """Stampa il log sulla console server e lo scrive nel file live per il frontend."""
-    print(message)
-    log_dir = os.path.join(workspace_root, session_id)
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, "live_logs.txt")
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(message + "\n")
 
 
 # =====================================================================
@@ -217,7 +214,7 @@ def _genera_report_grafo(G):
     return "\n".join(righe)
 
 
-def process_directory_to_graph(cartella_sorgente, llm, session_id):
+def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None):
     """
     Itera sui file applicando filtri avanzati (parser nativi per FoxPro,
     lettura diretta per il codice standard), costruisce il grafo delle
@@ -241,7 +238,7 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id):
 
             try:
                 log_message(session_id, f"Analisi dipendenze IA per: {file} ...")
-                dati_json = extract_dependencies_from_file(file, content, llm)
+                dati_json = extract_dependencies_from_file(file, content, llm, tracker=tracker)
                 nodo_principale = dati_json.get("file", file)
                 G.add_node(nodo_principale)
 

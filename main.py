@@ -13,30 +13,37 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from auth import get_current_user_and_validate_license, supabase
+from payments import addebita_consumo_token, verifica_credito_token
+from payments import router as payments_router
 from src.code_unpacker import unpack_markdown_to_files
-from src.config import FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL
+from src.config import FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, WORKSPACE_DIR
 from src.crew import run_understanding_phase, run_design_phase, run_implementation_phase
 from src.graph_builder import (
     ESTENSIONI_VALIDE,
     extract_foxpro_dbf_schema,
     extract_foxpro_scx_code,
-    log_message,
     process_directory_to_graph,
 )
+from src.live_log import log_message
 from src.llm_config import get_llm
+from src.token_tracker import TokenUsageTracker
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Legge il percorso dal .env; fallback su una cartella locale
-WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", "/tmp/workspace_sessioni"))
+# WORKSPACE_DIR è definita in src/config.py: è l'UNICA fonte di verità,
+# condivisa con src/live_log.py così i log live vengono scritti e letti
+# dalla stessa cartella.
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="Piattaforma Enterprise di Modernizzazione Universale",
-    description="API suddivise in fasi con Checkpoint umani (HITL) e Capability Registry.",
-    version="2.1.0",
+    description=(
+        "API suddivise in fasi con Checkpoint umani (HITL), Capability Registry, "
+        "pagamenti (pass giornaliero via PayPal/Google Pay) e credito token a consumo."
+    ),
+    version="2.2.0",
 )
 
 # NOTA CORS: allow_origins=["*"] insieme ad allow_credentials=True viene
@@ -49,6 +56,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Endpoint di pagamento e credito token (payments.py)
+app.include_router(payments_router)
 
 
 # =====================================================================
@@ -130,6 +140,46 @@ def _estrai_zip_sicuro(zip_path: Path, destinazione: Path):
         zip_ref.extractall(destinazione_abs)
 
 
+# =====================================================================
+# Credito token (quota inclusa nel pass + ricariche)
+# =====================================================================
+
+def _chiudi_conteggio_token(user_id: str, tracker, session_id: str):
+    """
+    Addebita a fine fase il costo REALE dei token consumati e lo scrive nel
+    log live. Ritorna il blocco 'token' da includere nella risposta JSON
+    (None se la fase non ha consumato nulla).
+    """
+    if tracker is None or (tracker.tokens_totali == 0 and tracker.richieste == 0):
+        return None
+
+    costo, saldo = addebita_consumo_token(user_id, tracker, session_id=session_id)
+    if saldo is not None:
+        log_message(
+            session_id,
+            f"🪙 Token consumati nella fase: {tracker.tokens_totali} "
+            f"(≈ {costo:.4f} €). Credito residuo: {saldo:.2f} €.",
+        )
+        if saldo <= 0:
+            log_message(
+                session_id,
+                "⚠️ Credito token esaurito: ricarica o acquista un nuovo pass per le prossime fasi.",
+            )
+    else:
+        log_message(
+            session_id,
+            f"🪙 Token consumati nella fase: {tracker.tokens_totali} (≈ {costo:.4f} €).",
+        )
+
+    return {
+        "tokens_totali": tracker.tokens_totali,
+        "tokens_prompt": tracker.prompt_tokens,
+        "tokens_completion": tracker.completion_tokens,
+        "costo_eur": float(costo),
+        "saldo_residuo_eur": float(saldo) if saldo is not None else None,
+    }
+
+
 def require_admin(user_id: str = Depends(get_current_user_and_validate_license)):
     """Verifica che l'utente autenticato abbia ruolo admin nella tabella profiles."""
     try:
@@ -166,6 +216,12 @@ def fase1_understand(
     session_id = _valida_session_id(session_id)
     _verifica_proprieta_sessione(session_id, user_id)
 
+    # Credito token: blocca subito (402) chi ha esaurito la quota inclusa
+    # nel pass, PRIMA di consumare LLM. Il consumo reale della fase viene
+    # addebitato alla fine da _chiudi_conteggio_token.
+    saldo_token = verifica_credito_token(user_id)
+    tracker = TokenUsageTracker(modello_llm)
+
     # Validazione input PRIMA di toccare DB e filesystem: senza sorgenti
     # la pipeline girerebbe a vuoto producendo documentazione del nulla.
     if not file and not (codice_legacy and codice_legacy.strip()):
@@ -192,6 +248,9 @@ def fase1_understand(
     cartella_output = _cartella_sessione(session_id)
     cartella_output.mkdir(parents=True, exist_ok=True)
 
+    if saldo_token is not None:
+        log_message(session_id, f"🪙 Credito token disponibile: {saldo_token:.2f} €.")
+
     try:
         llm = get_llm(provider=provider_llm, model_name=modello_llm)
         codice_da_analizzare = ""
@@ -213,29 +272,41 @@ def fase1_understand(
             except zipfile.BadZipFile:
                 raise HTTPException(status_code=400, detail="Il file non è un archivio ZIP valido o è corrotto.")
 
-            codice_da_analizzare = process_directory_to_graph(cartella_sorgenti, llm, session_id)
+            codice_da_analizzare = process_directory_to_graph(
+                cartella_sorgenti, llm, session_id, tracker=tracker
+            )
 
         else:
             log_message(session_id, "📝 Analisi dello script di testo singolo avviata...")
             codice_da_analizzare = codice_legacy
 
         log_message(session_id, "🤖 Avvio del Team AI per la stesura della documentazione tecnica formale...")
-        run_understanding_phase(llm=llm, codice_legacy=codice_da_analizzare, output_dir=str(cartella_output))
+        run_understanding_phase(
+            llm=llm,
+            codice_legacy=codice_da_analizzare,
+            output_dir=str(cartella_output),
+            session_id=session_id,
+            tracker=tracker,
+        )
 
         log_message(session_id, "🗜️ Generazione del pacchetto ZIP del codice e dei report in corso...")
         shutil.make_archive(str(WORKSPACE_DIR / f"{session_id}_fase1"), "zip", str(cartella_output))
 
+        blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
         log_message(session_id, "✨ [SUCCESS]: Fase 1 completata. Report pronti per l'ispezione umana.")
         log_message(session_id, "🔄 Reindirizzamento al Checkpoint 1...")
 
         return {
             "status": "success",
             "session_id": session_id,
+            "token": blocco_token,
             "url_download": f"/api/v1/modernize/download/{session_id}/1",
         }
     except HTTPException:
         raise  # Non mascherare i 400/403 con un 500 generico
     except Exception as e:
+        # I token già consumati prima del crash vanno comunque contabilizzati
+        _chiudi_conteggio_token(user_id, tracker, session_id)
         log_message(session_id, f"❌ ERRORE CRITICO DI SISTEMA: {e}")
         logger.exception("Errore in Fase 1, sessione %s", session_id)
         raise HTTPException(status_code=500, detail=f"Errore interno IA: {e}")
@@ -245,34 +316,57 @@ def fase1_understand(
 # LOG LIVE
 # =====================================================================
 
+def _formatta_riga_log(linea: str) -> str:
+    """Colora la riga in base al tipo di evento (le emoji sono i marcatori)."""
+    if "❌" in linea:
+        return f"<span style='color: #ef4444;'>&gt; {linea}</span>"
+    if "⚠️" in linea or "🪙" in linea:
+        return f"<span style='color: #f59e0b;'>&gt; {linea}</span>"
+    if "📈" in linea or "✅" in linea or "✨" in linea:
+        return f"<span style='color: #22c55e;'>&gt; {linea}</span>"
+    if "📦" in linea or "🗄️" in linea:
+        return f"<span style='color: #a855f7;'>&gt;</span> {linea}"
+    if "🧠" in linea or "🏛️" in linea or "⚙️" in linea or "🕵️" in linea:
+        return f"<span style='color: #3b82f6;'>&gt;</span> {linea}"
+    return f"&gt; {linea}"
+
+
 @app.get("/api/v1/modernize/logs/{session_id}")
 def ottieni_log_live(
     session_id: str,
+    da_riga: int = 0,
     user_id: str = Depends(get_current_user_and_validate_license),
 ):
+    """
+    Log live della sessione, sincronizzati con l'attività REALE degli agenti
+    (ogni riga è scritta dai callback delle Crew, con timestamp).
+
+    `da_riga` permette il polling incrementale: il frontend memorizza
+    `righe_totali` dell'ultima risposta e richiede solo le righe nuove,
+    invece di ricostruire (o simulare a tempo) l'intero log.
+    """
     session_id = _valida_session_id(session_id)
     _verifica_proprieta_sessione(session_id, user_id)
 
     log_path = WORKSPACE_DIR / session_id / "live_logs.txt"
     if not log_path.exists():
-        return {"logs": "Inizializzazione sessione di log..."}
+        return {"logs": "Inizializzazione sessione di log...", "righe_totali": 0, "da_riga": 0}
 
     with open(log_path, "r", encoding="utf-8") as f:
         contenuto = f.read()
 
-    linee_formattate = []
-    for linea in contenuto.split("\n"):
-        if "📦" in linea or "🗄️" in linea:
-            linee_formattate.append(f"<span style='color: #a855f7;'>&gt;</span> {linea}")
-        elif "🧠" in linea:
-            linee_formattate.append(f"<span style='color: #3b82f6;'>&gt;</span> {linea}")
-        elif "❌" in linea:
-            linee_formattate.append(f"<span style='color: #ef4444;'>&gt; {linea}</span>")
-        elif "📈" in linea:
-            linee_formattate.append(f"<span style='color: #22c55e;'>&gt; {linea}</span>")
-        elif linea.strip():
-            linee_formattate.append(f"&gt; {linea}")
-    return {"logs": "<br>".join(linee_formattate)}
+    righe = contenuto.splitlines()
+    totale = len(righe)
+    da_riga = max(0, min(da_riga, totale))
+
+    linee_formattate = [
+        _formatta_riga_log(linea) for linea in righe[da_riga:] if linea.strip()
+    ]
+    return {
+        "logs": "<br>".join(linee_formattate),
+        "righe_totali": totale,
+        "da_riga": da_riga,
+    }
 
 
 # =====================================================================
@@ -291,6 +385,9 @@ def fase2_design(
     if not cartella_output.exists():
         raise HTTPException(status_code=404, detail="Sessione non trovata. Carica prima la Fase 1.")
 
+    saldo_token = verifica_credito_token(user_id)
+    tracker = TokenUsageTracker(richiesta.modello_llm)
+
     try:
         supabase.table("migration_sessions").upsert({
             "id": session_id,
@@ -302,20 +399,42 @@ def fase2_design(
         raise HTTPException(status_code=500, detail=f"Errore salvataggio sessione Supabase: {e}")
 
     try:
+        if saldo_token is not None:
+            log_message(session_id, f"🪙 Credito token disponibile: {saldo_token:.2f} €.")
+        log_message(
+            session_id,
+            f"🏛️ Avvio Fase 2 (Design): architettura e piano di migrazione verso {richiesta.linguaggio_target}...",
+        )
+
         llm = get_llm(provider=richiesta.provider_llm, model_name=richiesta.modello_llm)
-        run_design_phase(llm=llm, linguaggio_target=richiesta.linguaggio_target, output_dir=str(cartella_output))
+        run_design_phase(
+            llm=llm,
+            linguaggio_target=richiesta.linguaggio_target,
+            output_dir=str(cartella_output),
+            session_id=session_id,
+            tracker=tracker,
+        )
 
         shutil.make_archive(str(WORKSPACE_DIR / f"{session_id}_fase2"), "zip", str(cartella_output))
+
+        blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
+        log_message(
+            session_id,
+            "✨ [SUCCESS]: Fase 2 completata. Migration Plan e Schema DB pronti per il Checkpoint 2 umano.",
+        )
 
         return {
             "status": "success",
             "messaggio": "Fase 2 (Design) completata. In attesa del CHECK POINT 2 umano.",
             "session_id": session_id,
+            "token": blocco_token,
             "url_download_report": f"/api/v1/modernize/download/{session_id}/2",
         }
     except HTTPException:
         raise
     except Exception as e:
+        _chiudi_conteggio_token(user_id, tracker, session_id)
+        log_message(session_id, f"❌ ERRORE CRITICO IN FASE 2: {e}")
         logger.exception("Errore in Fase 2, sessione %s", session_id)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -371,6 +490,9 @@ def fase3_implement(
     if not cartella_output.exists():
         raise HTTPException(status_code=404, detail="Sessione non trovata.")
 
+    saldo_token = verifica_credito_token(user_id)
+    tracker = TokenUsageTracker(richiesta.modello_llm)
+
     try:
         supabase.table("migration_sessions").upsert({
             "id": session_id,
@@ -382,6 +504,13 @@ def fase3_implement(
         raise HTTPException(status_code=500, detail=f"Errore salvataggio sessione Supabase: {e}")
 
     try:
+        if saldo_token is not None:
+            log_message(session_id, f"🪙 Credito token disponibile: {saldo_token:.2f} €.")
+        log_message(
+            session_id,
+            f"⚙️ Avvio Fase 3 (Implementation): generazione del codice {richiesta.linguaggio_target}...",
+        )
+
         llm = get_llm(provider=richiesta.provider_llm, model_name=richiesta.modello_llm)
 
         lista_file_legacy = _carica_file_legacy(cartella_sorgenti)
@@ -394,9 +523,12 @@ def fase3_implement(
             linguaggio_target=richiesta.linguaggio_target,
             output_dir=str(cartella_output),
             lista_file_legacy_estratti=lista_file_legacy,
+            session_id=session_id,
+            tracker=tracker,
         )
 
         # Sconfezionamento del codice generato in file fisici
+        log_message(session_id, "🗜️ Sconfezionamento del codice generato in file fisici e ZIP finale...")
         logger.info("Organizzazione del codice Backend in cartelle fisiche...")
         n_backend = unpack_markdown_to_files(str(cartella_output / FILE_BACKEND_IMPL), str(cartella_output))
 
@@ -404,6 +536,12 @@ def fase3_implement(
         n_frontend = unpack_markdown_to_files(str(cartella_output / FILE_FRONTEND_IMPL), str(cartella_output))
 
         shutil.make_archive(str(WORKSPACE_DIR / f"{session_id}_finale"), "zip", str(cartella_output))
+
+        blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
+        log_message(
+            session_id,
+            "✨ [SUCCESS]: Fase 3 completata. Progetto pronto per il Testing & Deployment umano.",
+        )
 
         return {
             "status": "success",
@@ -413,11 +551,14 @@ def fase3_implement(
             "file_falliti": esiti["falliti"],
             "file_saltati_da_checkpoint": esiti["saltati"],
             "file_sorgente_estratti": {"backend": n_backend, "frontend": n_frontend},
+            "token": blocco_token,
             "url_download_progetto": f"/api/v1/modernize/download/{session_id}/3",
         }
     except HTTPException:
         raise
     except Exception as e:
+        _chiudi_conteggio_token(user_id, tracker, session_id)
+        log_message(session_id, f"❌ ERRORE CRITICO IN FASE 3: {e}")
         logger.exception("Errore in Fase 3, sessione %s", session_id)
         raise HTTPException(status_code=500, detail=str(e))
 
