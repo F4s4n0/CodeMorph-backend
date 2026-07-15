@@ -21,7 +21,7 @@ load_dotenv()
 # scriveva i log in una cartella relativa "workspace": chi scriveva i log
 # live e chi li leggeva (endpoint /logs) guardavano DUE posti diversi, e il
 # frontend non riceveva mai l'attività reale degli agenti.
-WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", "/tmp/workspace_sessioni"))
+WORKSPACE_DIR = Path(__file__).parent.parent / "workspace_sessioni"
 
 # --- Nomi dei file di output (deliverable per fase) ---
 FILE_ASSESSMENT       = "1_Assessment_Inventory.md"

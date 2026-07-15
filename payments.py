@@ -284,6 +284,18 @@ def verifica_credito_token(user_id) -> Optional[Decimal]:
     - Infrastruttura token assente (migrazione SQL non applicata): fail-open
       con warning nei log, per non bloccare le installazioni esistenti.
     """
+    
+    # --- INIZIO VIP PASS ADMIN ---
+    try:
+        utente = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
+        if utente.data and utente.data.get("role") == "admin":
+            # Usiamo float (9999.0) o Decimal se preferisci, per l'admin sarà infinito
+            return 9999.00  
+    except Exception as e:
+        # Se c'è un errore nella lettura dell'admin, passiamo sotto al controllo standard
+        pass
+    # --- FINE VIP PASS ADMIN ---
+
     saldo, wallet_esiste = leggi_saldo_token(user_id)
     if saldo is None:
         return None
@@ -316,6 +328,18 @@ def addebita_consumo_token(user_id, tracker, session_id=None):
     Ritorna (costo, saldo_dopo); saldo_dopo è None se l'addebito non è
     riuscito (infrastruttura assente o errore DB, loggato).
     """
+    
+    # --- INIZIO VIP PASS ADMIN ---
+    try:
+        utente = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
+        if utente.data and utente.data.get("role") == "admin":
+            # Per l'admin il costo è sempre 0 e il saldo rimane "infinito"
+            from decimal import Decimal
+            return Decimal("0.00"), Decimal("9999.00")
+    except Exception:
+        pass
+    # --- FINE VIP PASS ADMIN ---
+
     costo = tracker.costo_eur()
     if costo <= 0 and tracker.tokens_totali == 0:
         return Decimal("0"), None
