@@ -8,6 +8,7 @@ langchain-ollama>=0.2.0,<0.3.0
 python-dotenv
 fastapi
 uvicorn
+httpx>=0.24,<1.0
 networkx
 dbfread
 supabase
