@@ -519,7 +519,7 @@ def fase3_implement(
 
         lista_file_legacy = _carica_file_legacy(cartella_sorgenti)
         if not lista_file_legacy:
-            lista_file_legacy = [{"nome": "codice_sconosciuto.txt", "codice": "Nessun codice trovato."}]
+            lista_file_legacy = [{"nome": "pasted_code.txt", "codice": "Nessun codice trovato."}]
 
         # AVVIO MOTORE IA: ora ritorna gli esiti (completati/falliti/QA)
         esiti = run_implementation_phase(
