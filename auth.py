@@ -1,64 +1,118 @@
+import logging
 import os
+from datetime import datetime, timezone
+
 import jwt
-from datetime import datetime
-from fastapi import HTTPException, Security, Depends
+from dotenv import load_dotenv
+from fastapi import HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
-from dotenv import load_dotenv # <-- AGGIUNGI QUESTO
 
-# Carica le variabili dal file .env nel sistema
-load_dotenv() # <-- AGGIUNGI QUESTO PRIMA DI LEGGERE LE VARIABILI
+# Carica le variabili dal file .env PRIMA di leggerle
+load_dotenv()
 
-# Inizializzazione variabili
+logger = logging.getLogger(__name__)
+
+# --- Bootstrap configurazione: fallire subito e con un messaggio chiaro ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
-# Client Supabase per fare query al DB
+_mancanti = [
+    nome
+    for nome, valore in (
+        ("SUPABASE_URL", SUPABASE_URL),
+        ("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_SERVICE_ROLE_KEY),
+        ("SUPABASE_JWT_SECRET", SUPABASE_JWT_SECRET),
+    )
+    if not valore
+]
+if _mancanti:
+    # Senza questo check, create_client(None, ...) esplode più avanti
+    # con un errore criptico difficile da diagnosticare in produzione.
+    raise RuntimeError(
+        f"Configurazione incompleta: variabili d'ambiente mancanti: {', '.join(_mancanti)}. "
+        "Verifica il file .env."
+    )
+
+# Client Supabase per le query al DB (usa la service role key: solo lato server!)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 security = HTTPBearer()
 
-def get_current_user_and_validate_license(credentials: HTTPAuthorizationCredentials = Security(security)):
+
+def _parse_expiry(expires_at_str):
+    """
+    Converte il timestamp ISO di Supabase in datetime timezone-aware.
+    Se il timestamp è naive (senza fuso), lo assume UTC — che è quello
+    che Supabase usa internamente — invece di confrontare date ambigue.
+    """
+    expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at
+
+
+def get_current_user_and_validate_license(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+):
     token = credentials.credentials
     try:
-        # 1. Decodifica il JWT generato da Supabase Auth
+        # 1. Decodifica del JWT generato da Supabase Auth
+        # TODO: valutare options={"verify_aud": True} con audience="authenticated"
+        # (l'aud standard dei token Supabase) per una verifica più stretta.
         payload = jwt.decode(
-            token, 
-            SUPABASE_JWT_SECRET, 
-            algorithms=["HS256"], 
-            options={"verify_aud": False}
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            options={"verify_aud": False},
         )
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Token non valido: user_id mancante.")
-        
-        # 2. Controllo Licenza Giornaliera sul Database di Supabase
-        response = supabase.table("user_licenses").select("expires_at").eq("user_id", user_id).execute()
-        
-        if not response.data:
-            raise HTTPException(
-                status_code=402, 
-                detail="Nessuna licenza trovata per questo account. Acquista un pass giornaliero."
-            )
-            
-        expires_at_str = response.data[0]["expires_at"]
-        # Conversione timestamp ISO (es: 2026-07-13T23:59:59+00:00)
-        # Nota: gestisce la rimozione del fuso orario per il confronto rapido
-        expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
-        
-        if datetime.now(expires_at.tzinfo) > expires_at:
-            raise HTTPException(
-                status_code=402, 
-                detail="La tua licenza giornaliera è scaduta. Rinnovala per continuare a usare gli agenti."
-            )
-            
-        # Se tutto è ok, restituisce l'ID dell'utente autenticato e autorizzato
-        return user_id
-
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Sessione scaduta. Effettua nuovamente il login.")
     except jwt.InvalidTokenError as e:
-        print(f"🚨 ERRORE JWT REALE: {str(e)}") # Lo vedrai nel terminale nero
-        print(f"🔑 LUNGHEZZA SECRET: {len(SUPABASE_JWT_SECRET) if SUPABASE_JWT_SECRET else 'VUOTO!'}")
-        raise HTTPException(status_code=401, detail=f"Errore Token Reale: {str(e)}")
+        # Il dettaglio tecnico va SOLO nei log server: esporlo al client
+        # (com'era prima, insieme alla lunghezza del secret) regala a un
+        # attaccante informazioni utili a forgiare token.
+        logger.warning("Token JWT non valido: %s", e)
+        raise HTTPException(status_code=401, detail="Token di autenticazione non valido.")
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Token non valido: user_id mancante.")
+
+    # 2. Controllo licenza sul database Supabase.
+    #    Ordiniamo per scadenza decrescente: se l'utente ha rinnovato più volte
+    #    e ha più righe, conta la licenza PIÙ RECENTE, non la prima trovata.
+    try:
+        response = (
+            supabase.table("user_licenses")
+            .select("expires_at")
+            .eq("user_id", user_id)
+            .order("expires_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error("Errore query licenze per utente %s: %s", user_id, e)
+        raise HTTPException(status_code=503, detail="Servizio licenze temporaneamente non disponibile.")
+
+    if not response.data:
+        raise HTTPException(
+            status_code=402,
+            detail="Nessuna licenza trovata per questo account. Acquista un pass giornaliero.",
+        )
+
+    try:
+        expires_at = _parse_expiry(response.data[0]["expires_at"])
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error("Timestamp licenza malformato per utente %s: %s", user_id, e)
+        raise HTTPException(status_code=500, detail="Dati licenza non validi. Contatta il supporto.")
+
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(
+            status_code=402,
+            detail="La tua licenza giornaliera è scaduta. Rinnovala per continuare a usare gli agenti.",
+        )
+
+    # Tutto ok: restituisce l'ID dell'utente autenticato e autorizzato
+    return user_id
