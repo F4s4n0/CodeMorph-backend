@@ -33,12 +33,16 @@ def log_message(session_id, message):
         return
 
     log_dir = WORKSPACE_DIR / str(session_id)
+    log_file = log_dir / "live_logs.txt"
+    
+    # AGGIUNTA DEBUG: Stampa il percorso assoluto in cui SCRIVE
+    print(f"✍️ DEBUG SCRITTURA: Scrivo il log in -> {log_file.resolve()}")
+    
     try:
         os.makedirs(log_dir, exist_ok=True)
-        with open(log_dir / "live_logs.txt", "a", encoding="utf-8") as f:
+        with open(log_file, "a", encoding="utf-8") as f:
             f.write(riga + "\n")
     except OSError as e:
-        # Il log live non deve MAI far fallire la pipeline di migrazione
         logger.warning("Impossibile scrivere il log live di %s: %s", session_id, e)
 
 

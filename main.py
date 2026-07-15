@@ -349,6 +349,10 @@ def ottieni_log_live(
     _verifica_proprieta_sessione(session_id, user_id)
 
     log_path = WORKSPACE_DIR / session_id / "live_logs.txt"
+    
+    # AGGIUNTA DEBUG: Stampa il percorso assoluto in cui CERCA
+    print(f"🔎 DEBUG LETTURA: Cerco il log in -> {log_path.resolve()} | Esiste? {log_path.exists()}")
+    
     if not log_path.exists():
         return {"logs": "Inizializzazione sessione di log...", "righe_totali": 0, "da_riga": 0}
 
