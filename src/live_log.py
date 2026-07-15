@@ -36,7 +36,7 @@ def log_message(session_id, message):
     log_file = log_dir / "live_logs.txt"
     
     # AGGIUNTA DEBUG: Stampa il percorso assoluto in cui SCRIVE
-    print(f"✍️ DEBUG SCRITTURA: Scrivo il log in -> {log_file.resolve()}")
+    logger.info("✍️ DEBUG SCRITTURA: Scrivo il log in -> %s", log_file.resolve())
     
     try:
         os.makedirs(log_dir, exist_ok=True)
