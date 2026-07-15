@@ -14,6 +14,19 @@ from src.config import (
     MERMAID_RULES,
 )
 
+# =====================================================================
+# HELPER PER LA SICUREZZA DEI PROMPT
+# =====================================================================
+def _escape_braces(text: str) -> str:
+    """
+    Sostituisce { con {{ e } con }} nei testi esterni (codice legacy, report generati).
+    Previene l'errore "Missing required template variable" di LangChain/CrewAI,
+    che cerca erroneamente di interpretare le graffe del codice o dei JSON come variabili.
+    """
+    if not text:
+        return ""
+    return str(text).replace("{", "{{").replace("}", "}}")
+
 
 # =====================================================================
 # FASE 1 - UNDERSTANDING
@@ -138,15 +151,14 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
     Ritorna i task per la FASE 2: Design (Universale).
     Prende in input i report validati della fase 1 e produce il piano architetturale.
     Si ferma per il CHECK POINT 2.
-
-    `contesto_fase1` è il testo dei documenti prodotti in FASE 1 (letti da disco
-    dal chiamante): la FASE 2 gira in una Crew separata, quindi il contesto
-    NON passa automaticamente tra le fasi e va iniettato esplicitamente.
     """
+    
+    # 🛡️ PROTEZIONE: Disinnesca le graffe generate in Fase 1
+    safe_contesto = _escape_braces(contesto_fase1)
 
     blocco_contesto = (
-        f"\n\nDOCUMENTAZIONE VALIDATA DELLA FASE DI UNDERSTANDING:\n{contesto_fase1}\n"
-        if contesto_fase1
+        f"\n\nDOCUMENTAZIONE VALIDATA DELLA FASE DI UNDERSTANDING:\n{safe_contesto}\n"
+        if safe_contesto
         else ""
     )
 
@@ -210,10 +222,6 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
 class ImplementationTasks:
     """
     Contratto esplicito della coppia di task iterativi.
-
-    Evita l'accesso posizionale fragile (tasks[0], tasks[1]) nel chiamante:
-    se domani si aggiunge un terzo task, il codice a valle non si rompe
-    in silenzio né scambia backend/frontend.
     """
     backend: Task
     frontend: Task
@@ -235,6 +243,11 @@ def get_iterative_implementation_tasks(
     iniettando l'architettura globale (ADR + schema DB).
     """
 
+    # 🛡️ PROTEZIONE: Disinnesca le graffe dal codice legacy originale e dai report
+    safe_legacy = _escape_braces(contenuto_file_legacy)
+    safe_adr = _escape_braces(contesto_adr)
+    safe_sql = _escape_braces(contesto_sql)
+
     backend_task = Task(
         description=f"""
         Sei un Senior Backend Developer. Il tuo obiettivo NON È TRADURRE il codice riga per riga.
@@ -242,14 +255,14 @@ def get_iterative_implementation_tasks(
 
         REGOLE ARCHITETTURALI (DA RISPETTARE RIGOROSAMENTE):
         Ecco il documento ADR approvato dal Cloud Architect. Devi usare ESATTAMENTE i pattern descritti qui:
-        {contesto_adr}
+        {safe_adr}
 
         SCHEMA DATABASE TARGET:
         Usa SOLO le entità e i nomi colonna presenti in questo schema. Ignora le vecchie strutture dati legacy:
-        {contesto_sql}
+        {safe_sql}
 
         FILE LEGACY DA ANALIZZARE ({nome_file_legacy}):
-        {contenuto_file_legacy}
+        {safe_legacy}
 
         Ignora completamente la UI, i bottoni o le finestre. Crea solo Endpoint REST (Controller) e Classi di Servizio.
 
@@ -273,10 +286,10 @@ def get_iterative_implementation_tasks(
         devi disegnare l'interfaccia utente moderna usando {linguaggio_target}.
 
         REGOLE ARCHITETTURALI:
-        {contesto_adr}
+        {safe_adr}
 
         FILE LEGACY ORIGINALE (per capire l'intento della UX):
-        {contenuto_file_legacy}
+        {safe_legacy}
 
         Non usare librerie vecchie. Chiama gli endpoint REST del backend.
 
@@ -311,22 +324,18 @@ def get_quality_check_task(
 ):
     """
     Task per il controllo qualità.
-
-    `codice_da_analizzare` deve contenere il codice generato (letto da disco dal
-    chiamante): senza iniezione esplicita l'auditor NON ha accesso ai file,
-    perché gli agenti non hanno tool di lettura filesystem.
-
-    `chunk_label` permette di eseguire la review a blocchi (es. "parte 1/3")
-    quando il codice generato supera la context window; `output_filename`
-    va differenziato per chunk per non sovrascrivere i report precedenti.
     """
+    
+    # 🛡️ PROTEZIONE: Disinnesca le graffe dal codice sorgente appena generato
+    safe_codice = _escape_braces(codice_da_analizzare)
+    
     intestazione_chunk = f" ({chunk_label})" if chunk_label else ""
 
     quality_check_task = Task(
         description=(
             f"Analizza accuratamente il seguente codice sorgente generato{intestazione_chunk} "
             "e le relative suite di test:\n\n"
-            f"\"\"\"\n{codice_da_analizzare}\n\"\"\"\n\n"
+            f"\"\"\"\n{safe_codice}\n\"\"\"\n\n"
             "Esegui un audit di qualità e sicurezza simulando i severi vincoli di "
             "SonarQube e le linee guida OWASP.\n"
             "Stima se la copertura dei test (Coverage) raggiunge l'obiettivo dell'80%, "
