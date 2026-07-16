@@ -105,3 +105,9 @@ GIORNI_MASSIMI_ACQUISTO = 365
 BONUS_SOGLIA_GIORNI = 30
 BONUS_GIORNI_MINIMO = 2
 BONUS_GIORNI_MASSIMO = 30
+# --- Soglia PayPal e bonifico -------------------------------------------
+# Tetto per singolo pagamento PayPal (limite del circuito ~15.000 €:
+# verifica il massimale REALE del tuo account Business e adegua).
+# Con 299 €/giorno = 50 giorni esatti. Oltre: bonifico bancario.
+SOGLIA_MASSIMA_PAYPAL_EUR = Decimal("14950.00")
+# Le coordinate del bonifico NON vanno qui ma nelle variabili d'ambiente:

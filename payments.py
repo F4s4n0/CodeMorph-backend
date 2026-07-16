@@ -32,6 +32,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Literal, Optional
@@ -72,6 +73,20 @@ except ImportError:  # config.py non ancora aggiornato: default a listino
     BONUS_SOGLIA_GIORNI = 30    # sotto questa soglia: nessun bonus
     BONUS_GIORNI_MINIMO = 2     # bonus alla soglia (30 giorni -> 2 gratis)
     BONUS_GIORNI_MASSIMO = 30   # bonus al massimo (365 giorni -> 30 gratis)
+
+# Tetto massimo per un singolo pagamento PayPal: oltre questa cifra il
+# checkout PayPal viene rifiutato dal circuito (limite ~15.000 € — verifica
+# il massimale REALE del tuo account Business e adegua il valore in config).
+# Con il listino a 299 €/giorno corrisponde a 50 giorni (14.950 €).
+# Sopra soglia resta disponibile il BONIFICO BANCARIO.
+try:
+    from src.config import SOGLIA_MASSIMA_PAYPAL_EUR
+except ImportError:
+    SOGLIA_MASSIMA_PAYPAL_EUR = Decimal("14950.00")
+
+# Coordinate per i pagamenti via bonifico (da variabili d'ambiente, MAI nel codice)
+IBAN_BONIFICI = os.getenv("IBAN_BONIFICI", "").strip()
+INTESTATARIO_BONIFICI = os.getenv("INTESTATARIO_BONIFICI", "").strip()
 
 
 def calcola_giorni_bonus(giorni_pagati: int) -> int:
@@ -474,13 +489,97 @@ def _marca_stato_ordine(order_id, stato):
         logger.error("Impossibile marcare l'ordine %s come '%s': %s", order_id, stato, e)
 
 
+def _eroga_acquisto(user_id, ordine_db, order_id) -> dict:
+    """
+    Attiva quanto acquistato in base al tipo dell'ordine registrato su DB.
+    UNICA implementazione dell'erogazione, condivisa tra la cattura PayPal e
+    la conferma admin dei bonifici: qualunque metodo di pagamento passa da qui.
+    NON gestisce le transizioni di stato: il chiamante deve aver già vinto la
+    transizione condizionata (creato/in_attesa_bonifico -> completato).
+    """
+    if ordine_db["tipo"] == "pass_giornaliero":
+        scadenza = _attiva_pass_giornaliero(user_id)
+        saldo = _modifica_saldo(user_id, QUOTA_TOKEN_PASS_EUR)
+        _inserisci_movimento(
+            user_id, "accredito_pass", QUOTA_TOKEN_PASS_EUR,
+            descrizione=f"Credito token incluso nel pass giornaliero (ordine {order_id})",
+        )
+        return {
+            "status": "success",
+            "tipo": "pass_giornaliero",
+            "metodo": ordine_db["metodo"],
+            "licenza_scade_il": scadenza.isoformat(),
+            "token_accreditati_eur": float(QUOTA_TOKEN_PASS_EUR),
+            "saldo_token_eur": float(saldo),
+        }
+
+    if ordine_db["tipo"] == "pass_giorni":
+        # I giorni vengono letti dall'ordine registrato alla creazione
+        # (calcolati lato server), MAI da input del client.
+        giorni_pagati = int(ordine_db.get("giorni_pagati") or 0)
+        giorni_bonus = int(ordine_db.get("giorni_bonus") or 0)
+        if giorni_pagati <= 0:
+            # Ordine registrato prima della migrazione SQL o corrotto
+            raise ValueError(f"Ordine pass_giorni senza giorni registrati: {order_id}")
+
+        giorni_totali = giorni_pagati + giorni_bonus
+        scadenza = _attiva_pass(user_id, ore_totali=giorni_totali * 24)
+
+        quota_token = (QUOTA_TOKEN_GIORNO_EUR * giorni_pagati).quantize(_DUE_DECIMALI)
+        saldo = _modifica_saldo(user_id, quota_token)
+        _inserisci_movimento(
+            user_id, "accredito_pass", quota_token,
+            descrizione=(
+                f"Credito token incluso nel pass {giorni_pagati} giorni "
+                f"(+{giorni_bonus} bonus) — ordine {order_id}"
+            ),
+        )
+        return {
+            "status": "success",
+            "tipo": "pass_giorni",
+            "metodo": ordine_db["metodo"],
+            "giorni_pagati": giorni_pagati,
+            "giorni_bonus": giorni_bonus,
+            "giorni_totali": giorni_totali,
+            "licenza_scade_il": scadenza.isoformat(),
+            "token_accreditati_eur": float(quota_token),
+            "saldo_token_eur": float(saldo),
+        }
+
+    # ricarica_token
+    importo = _dec(ordine_db["importo_eur"])
+    saldo = _modifica_saldo(user_id, importo)
+    _inserisci_movimento(
+        user_id, "ricarica", importo,
+        descrizione=f"Ricarica credito token (ordine {order_id})",
+    )
+    return {
+        "status": "success",
+        "tipo": "ricarica_token",
+        "metodo": ordine_db["metodo"],
+        "token_accreditati_eur": float(importo),
+        "saldo_token_eur": float(saldo),
+    }
+
+
+def _verifica_admin(user_id):
+    """403 se l'utente autenticato non ha ruolo admin (per la conferma bonifici)."""
+    try:
+        utente = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
+    except Exception as e:
+        logger.error("Verifica ruolo admin fallita per %s: %s", user_id, e)
+        raise HTTPException(status_code=503, detail="Impossibile verificare i privilegi.")
+    if not utente.data or utente.data.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Operazione riservata agli amministratori.")
+
+
 # =====================================================================
 # Modelli di input
 # =====================================================================
 
 class InputOrdine(BaseModel):
     tipo: Literal["pass_giornaliero", "pass_giorni", "ricarica_token"]
-    metodo: Literal["paypal", "googlepay"] = "paypal"
+    metodo: Literal["paypal", "googlepay", "bonifico"] = "paypal"
     # Solo per le ricariche: per i pass l'importo è calcolato a listino
     importo_eur: Optional[float] = None
     # Solo per pass_giorni: numero di giorni da acquistare (pacchetto o libero)
@@ -503,7 +602,11 @@ def configurazione_pagamenti(user_id: str = Depends(get_current_user)):
         "ambiente": paypal.ambiente,
         "paypal_client_id": paypal.client_id or None,  # ID pubblico, serve al JS SDK
         "valuta": VALUTA_PAGAMENTI,
-        "metodi": ["paypal", "googlepay"],
+        "metodi": ["paypal", "googlepay", "bonifico"],
+        # PayPal è utilizzabile solo fino a questa cifra per singolo ordine;
+        # oltre, il frontend deve proporre il bonifico.
+        "soglia_massima_paypal_eur": float(SOGLIA_MASSIMA_PAYPAL_EUR),
+        "bonifico_disponibile": bool(IBAN_BONIFICI),
         "prezzo_pass_giornaliero_eur": float(PREZZO_PASS_GIORNALIERO_EUR),
         "quota_token_inclusa_eur": float(QUOTA_TOKEN_PASS_EUR),
         "durata_pass_ore": DURATA_PASS_ORE,
@@ -576,6 +679,66 @@ def crea_ordine_pagamento(richiesta: InputOrdine, user_id: str = Depends(get_cur
             )
         descrizione = f"CodeMorph.AI — Ricarica credito token {importo:.2f} €"
 
+    # ------------------------- BONIFICO BANCARIO -------------------------
+    # Nessuna chiamata a PayPal: l'ordine nasce "in_attesa_bonifico" e viene
+    # erogato dall'endpoint admin di conferma quando l'incasso arriva.
+    if richiesta.metodo == "bonifico":
+        if not IBAN_BONIFICI:
+            raise HTTPException(
+                status_code=503,
+                detail="Pagamento con bonifico non disponibile (IBAN_BONIFICI non configurato sul server).",
+            )
+        order_id = f"BON-{uuid.uuid4().hex[:12].upper()}"
+        try:
+            supabase.table("payment_orders").insert({
+                "id": order_id,
+                "user_id": user_id,
+                "tipo": richiesta.tipo,
+                "metodo": "bonifico",
+                "importo_eur": float(importo),
+                "valuta": VALUTA_PAGAMENTI,
+                "stato": "in_attesa_bonifico",
+                "giorni_pagati": giorni_pagati,
+                "giorni_bonus": giorni_bonus,
+            }).execute()
+        except Exception as e:
+            logger.error("Ordine bonifico %s non registrato su DB: %s", order_id, e)
+            raise HTTPException(status_code=500, detail="Ordine non registrato: riprova.")
+
+        return {
+            "order_id": order_id,
+            "stato": "in_attesa_bonifico",
+            "tipo": richiesta.tipo,
+            "metodo": "bonifico",
+            "importo_eur": float(importo),
+            "valuta": VALUTA_PAGAMENTI,
+            "giorni_pagati": giorni_pagati,
+            "giorni_bonus": giorni_bonus,
+            "istruzioni_bonifico": {
+                "iban": IBAN_BONIFICI,
+                "intestatario": INTESTATARIO_BONIFICI or None,
+                "importo_eur": float(importo),
+                # La causale È l'ID ordine: permette di abbinare l'incasso
+                "causale": order_id,
+                "nota": (
+                    "L'attivazione avviene alla conferma dell'incasso "
+                    "(tipicamente 1-2 giorni lavorativi dalla ricezione del bonifico)."
+                ),
+            },
+        }
+
+    # ------------------------- PAYPAL / GOOGLE PAY -------------------------
+    # Tetto per singolo pagamento sul circuito PayPal: sopra soglia il
+    # cliente deve usare il bonifico.
+    if importo > SOGLIA_MASSIMA_PAYPAL_EUR:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Gli ordini oltre {SOGLIA_MASSIMA_PAYPAL_EUR:.2f} € non sono pagabili "
+                "con PayPal: seleziona il pagamento con bonifico bancario."
+            ),
+        )
+
     ordine = paypal.crea_ordine(importo, descrizione, user_id)
     order_id = ordine.get("id")
     if not order_id:
@@ -644,6 +807,12 @@ def cattura_pagamento(richiesta: InputCattura, user_id: str = Depends(get_curren
     if ordine_db["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Questo ordine appartiene a un altro account.")
 
+    if ordine_db["metodo"] == "bonifico":
+        raise HTTPException(
+            status_code=400,
+            detail="Questo ordine è un bonifico: viene attivato alla conferma dell'incasso, non tramite PayPal.",
+        )
+
     if ordine_db["stato"] == "completato":
         saldo, _ = leggi_saldo_token(user_id)
         return {
@@ -702,70 +871,9 @@ def cattura_pagamento(richiesta: InputCattura, user_id: str = Depends(get_curren
             "saldo_token_eur": float(saldo) if saldo is not None else None,
         }
 
-    # 3. Erogazione di quanto acquistato
+    # 3. Erogazione di quanto acquistato (implementazione condivisa con i bonifici)
     try:
-        if ordine_db["tipo"] == "pass_giornaliero":
-            scadenza = _attiva_pass_giornaliero(user_id)
-            saldo = _modifica_saldo(user_id, QUOTA_TOKEN_PASS_EUR)
-            _inserisci_movimento(
-                user_id, "accredito_pass", QUOTA_TOKEN_PASS_EUR,
-                descrizione=f"Credito token incluso nel pass giornaliero (ordine {richiesta.order_id})",
-            )
-            return {
-                "status": "success",
-                "tipo": "pass_giornaliero",
-                "metodo": ordine_db["metodo"],
-                "licenza_scade_il": scadenza.isoformat(),
-                "token_accreditati_eur": float(QUOTA_TOKEN_PASS_EUR),
-                "saldo_token_eur": float(saldo),
-            }
-
-        if ordine_db["tipo"] == "pass_giorni":
-            # I giorni vengono letti dall'ordine registrato alla creazione
-            # (calcolati lato server), MAI da input del client.
-            giorni_pagati = int(ordine_db.get("giorni_pagati") or 0)
-            giorni_bonus = int(ordine_db.get("giorni_bonus") or 0)
-            if giorni_pagati <= 0:
-                # Ordine registrato prima della migrazione SQL o corrotto
-                raise ValueError(f"Ordine pass_giorni senza giorni registrati: {richiesta.order_id}")
-
-            giorni_totali = giorni_pagati + giorni_bonus
-            scadenza = _attiva_pass(user_id, ore_totali=giorni_totali * 24)
-
-            quota_token = (QUOTA_TOKEN_GIORNO_EUR * giorni_pagati).quantize(_DUE_DECIMALI)
-            saldo = _modifica_saldo(user_id, quota_token)
-            _inserisci_movimento(
-                user_id, "accredito_pass", quota_token,
-                descrizione=(
-                    f"Credito token incluso nel pass {giorni_pagati} giorni "
-                    f"(+{giorni_bonus} bonus) — ordine {richiesta.order_id}"
-                ),
-            )
-            return {
-                "status": "success",
-                "tipo": "pass_giorni",
-                "metodo": ordine_db["metodo"],
-                "giorni_pagati": giorni_pagati,
-                "giorni_bonus": giorni_bonus,
-                "giorni_totali": giorni_totali,
-                "licenza_scade_il": scadenza.isoformat(),
-                "token_accreditati_eur": float(quota_token),
-                "saldo_token_eur": float(saldo),
-            }
-
-        importo = _dec(ordine_db["importo_eur"])
-        saldo = _modifica_saldo(user_id, importo)
-        _inserisci_movimento(
-            user_id, "ricarica", importo,
-            descrizione=f"Ricarica credito token (ordine {richiesta.order_id})",
-        )
-        return {
-            "status": "success",
-            "tipo": "ricarica_token",
-            "metodo": ordine_db["metodo"],
-            "token_accreditati_eur": float(importo),
-            "saldo_token_eur": float(saldo),
-        }
+        return _eroga_acquisto(user_id, ordine_db, richiesta.order_id)
     except Exception:
         # Il pagamento è stato INCASSATO ma l'attivazione è fallita: non
         # lasciamo l'ordine su 'completato' (un retry sembrerebbe ok senza
@@ -778,6 +886,77 @@ def cattura_pagamento(richiesta: InputCattura, user_id: str = Depends(get_curren
                 "Pagamento ricevuto ma attivazione fallita: contatta il supporto "
                 f"citando l'ordine {richiesta.order_id}."
             ),
+        )
+
+
+@router.get("/admin/payments/bonifici-in-attesa")
+def bonifici_in_attesa(user_id: str = Depends(get_current_user)):
+    """[ADMIN] Elenco degli ordini via bonifico in attesa di incasso."""
+    _verifica_admin(user_id)
+    try:
+        risposta = (
+            supabase.table("payment_orders")
+            .select("*")
+            .eq("metodo", "bonifico")
+            .eq("stato", "in_attesa_bonifico")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return risposta.data or []
+    except Exception as e:
+        logger.error("Lettura bonifici in attesa fallita: %s", e)
+        raise HTTPException(status_code=503, detail="Servizio ordini non disponibile.")
+
+
+@router.post("/admin/payments/{order_id}/conferma-bonifico")
+def conferma_bonifico(order_id: str, user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Conferma l'incasso di un bonifico e attiva l'acquisto per il
+    cliente. Stessa erogazione idempotente e stessa protezione dalla doppia
+    conferma del flusso PayPal (transizione condizionata di stato).
+    """
+    _verifica_admin(user_id)
+
+    try:
+        risposta = supabase.table("payment_orders").select("*").eq("id", order_id).execute()
+    except Exception as e:
+        logger.error("Lettura ordine bonifico %s fallita: %s", order_id, e)
+        raise HTTPException(status_code=503, detail="Servizio ordini non disponibile.")
+
+    if not risposta.data:
+        raise HTTPException(status_code=404, detail="Ordine inesistente.")
+    ordine_db = risposta.data[0]
+
+    if ordine_db["metodo"] != "bonifico":
+        raise HTTPException(status_code=400, detail="Questo ordine non è un bonifico.")
+    if ordine_db["stato"] == "completato":
+        return {"status": "gia_completato", "messaggio": "Bonifico già confermato in precedenza: nessun nuovo accredito."}
+    if ordine_db["stato"] == "anomalo":
+        raise HTTPException(status_code=409, detail=f"Ordine in stato anomalo: verifica manuale richiesta ({order_id}).")
+
+    # Transizione condizionata: in_attesa_bonifico -> completato.
+    # Due conferme in parallelo (o un doppio click): una sola vince.
+    presa_in_carico = (
+        supabase.table("payment_orders")
+        .update({"stato": "completato", "completed_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", order_id)
+        .eq("stato", "in_attesa_bonifico")
+        .execute()
+    )
+    if not presa_in_carico.data:
+        return {"status": "gia_completato", "messaggio": "Bonifico già confermato in precedenza: nessun nuovo accredito."}
+
+    # Erogazione al PROPRIETARIO dell'ordine (non all'admin che conferma!)
+    try:
+        esito = _eroga_acquisto(ordine_db["user_id"], ordine_db, order_id)
+        esito["confermato_da_admin"] = user_id
+        return esito
+    except Exception:
+        _marca_stato_ordine(order_id, "anomalo")
+        logger.exception("Erogazione fallita per il bonifico %s", order_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Incasso registrato ma attivazione fallita: verifica manuale richiesta ({order_id}).",
         )
 
 
