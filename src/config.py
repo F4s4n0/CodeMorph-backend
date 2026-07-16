@@ -81,11 +81,33 @@ RICARICA_MASSIMA_EUR = Decimal("1000.00")
 # prefisso provider (es. "anthropic/claude-x" -> "claude-x"); i modelli
 # non in lista usano la voce "default".
 PREZZI_TOKEN_EUR_PER_1M = {
-    "gpt-4o":            {"prompt": Decimal("2.50"), "completion": Decimal("10.00")},
-    "gpt-4o-mini":       {"prompt": Decimal("0.20"), "completion": Decimal("0.80")},
-    "gpt-4.1":           {"prompt": Decimal("2.50"), "completion": Decimal("10.00")},
-    "gemini-2.0-flash":  {"prompt": Decimal("0.15"), "completion": Decimal("0.60")},
-    "default":           {"prompt": Decimal("3.00"), "completion": Decimal("12.00")},
+    "openai": {
+        "gpt-5.4": {"prompt": Decimal("2.50"), "completion": Decimal("15.00")},
+        "gpt-5.4-mini": {"prompt": Decimal("0.25"), "completion": Decimal("2.00")},
+        "gpt-5.4-nano": {"prompt": Decimal("0.20"), "completion": Decimal("1.25")},
+        "gpt-5.5": {"prompt": Decimal("5.00"), "completion": Decimal("30.00")},
+    },
+    "google": {
+        "gemini-2.0-flash": {"prompt": Decimal("0.10"), "completion": Decimal("0.40")},
+        "gemini-2.5-flash": {"prompt": Decimal("0.30"), "completion": Decimal("2.50")},
+        "gemini-2.5-flash-lite": {"prompt": Decimal("0.10"), "completion": Decimal("0.40")},
+        "gemini-2.5-pro": {"prompt": Decimal("1.25"), "completion": Decimal("10.00")},
+        "gemini-3.1-flash-lite": {"prompt": Decimal("0.25"), "completion": Decimal("1.50")},
+        "gemini-3.1-flash": {"prompt": Decimal("0.50"), "completion": Decimal("3.00")},
+        "gemini-3.1-pro": {"prompt": Decimal("2.00"), "completion": Decimal("12.00")},
+    },
+    "anthropic": {
+        "claude-haiku-4.5": {"prompt": Decimal("1.00"), "completion": Decimal("5.00")},
+        "claude-sonnet-4.6": {"prompt": Decimal("3.00"), "completion": Decimal("15.00")},
+        "claude-sonnet-5": {"prompt": Decimal("3.00"), "completion": Decimal("15.00")},
+        "claude-opus-4.6": {"prompt": Decimal("5.00"), "completion": Decimal("25.00")},
+        "claude-opus-4.7": {"prompt": Decimal("5.00"), "completion": Decimal("25.00")},
+        "claude-opus-4.8": {"prompt": Decimal("5.00"), "completion": Decimal("25.00")},
+    },
+    "default": {
+        "prompt": Decimal("3.00"),
+        "completion": Decimal("12.00"),
+    },
 }
 
 # --- Pass multi-giorno -------------------------------------------------
