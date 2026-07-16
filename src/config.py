@@ -87,3 +87,21 @@ PREZZI_TOKEN_EUR_PER_1M = {
     "gemini-2.0-flash":  {"prompt": Decimal("0.15"), "completion": Decimal("0.60")},
     "default":           {"prompt": Decimal("3.00"), "completion": Decimal("12.00")},
 }
+
+# --- Pass multi-giorno -------------------------------------------------
+# Prezzo per ogni giorno di accesso acquistato; ogni giorno PAGATO include
+# QUOTA_TOKEN_GIORNO_EUR di credito token spendibile (ricaricabile a parte).
+PREZZO_GIORNO_EUR = Decimal("299.00")
+QUOTA_TOKEN_GIORNO_EUR = Decimal("20.00")
+
+# Pacchetti proposti nel frontend (l'utente può anche digitare un numero libero)
+PACCHETTI_GIORNI = [7, 30, 90, 180, 365]
+GIORNI_MASSIMI_ACQUISTO = 365
+
+# Bonus lineare sui giorni di accesso: alla soglia di 30 giorni acquistati
+# scattano 2 giorni gratis, crescendo linearmente fino a 30 giorni gratis
+# per un acquisto di 365 giorni. Sotto la soglia: nessun bonus.
+# Verifica: 7->0, 30->2, 90->7, 180->14, 365->30.
+BONUS_SOGLIA_GIORNI = 30
+BONUS_GIORNI_MINIMO = 2
+BONUS_GIORNI_MASSIMO = 30

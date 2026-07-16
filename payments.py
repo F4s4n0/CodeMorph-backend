@@ -3,19 +3,29 @@ Pagamenti e credito token di CodeMorph.AI.
 
 - Pass giornaliero: 299,00 € per 24 ore di accesso, di cui 20,00 € vengono
   accreditati come CREDITO TOKEN spendibile (vedi src/config.py).
+- Pass multi-giorno (pass_giorni): pacchetti 7/30/90/180/365 giorni o numero
+  personalizzato. Prezzo = giorni × PREZZO_GIORNO_EUR; ogni giorno PAGATO
+  include QUOTA_TOKEN_GIORNO_EUR di credito token. Giorni BONUS gratuiti con
+  crescita lineare: 30 giorni → 2 gratis … 365 giorni → 30 gratis (vedi
+  calcola_giorni_bonus). I giorni bonus estendono la licenza ma non
+  accreditano quota token.
 - Metodi supportati: PayPal e Google Pay. Entrambi si regolano tramite le
   PayPal Orders API v2: il bottone Google Pay del JS SDK di PayPal
   (components=buttons,googlepay) approva lo STESSO ordine creato qui, quindi
   il flusso server (crea ordine -> cattura -> erogazione) è identico e cambia
   solo il campo `metodo` registrato a fini contabili.
+- Flusso REDIRECT (checkout gestito dal backend): se FRONTEND_URL è
+  configurata, gli ordini includono return_url/cancel_url; il frontend
+  reindirizza l'utente su approve_url e al rientro chiama /payments/cattura
+  con l'order_id (parametro `token` aggiunto da PayPal all'URL di ritorno).
 - Credito token: portafoglio per utente (tabella token_wallets). Ogni fase
   addebita il costo REALE dei token consumati (vedi src/token_tracker.py);
   a saldo esaurito le fasi rispondono 402 finché l'utente non ricarica o
   acquista un nuovo pass.
 
 Variabili d'ambiente: PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET,
-PAYPAL_ENV (sandbox | live, default sandbox).
-Schema database: db/schema_pagamenti_token.sql (da eseguire su Supabase).
+PAYPAL_ENV (sandbox | live, default sandbox), FRONTEND_URL (per il redirect).
+Schema database: db/schema_pagamenti_token.sql + db/migrazione_pass_giorni.sql.
 """
 
 import logging
@@ -39,6 +49,46 @@ from src.config import (
     RICARICA_MINIMA_EUR,
     VALUTA_PAGAMENTI,
 )
+
+# --- Costanti del pass multi-giorno ---------------------------------------
+# Importate da src.config se presenti (fonte di verità preferita); i default
+# qui sotto permettono al modulo di funzionare anche prima di aggiornare
+# config.py, ma è consigliato spostare i valori lì (vedi blocco fornito).
+try:
+    from src.config import (
+        PREZZO_GIORNO_EUR,
+        QUOTA_TOKEN_GIORNO_EUR,
+        PACCHETTI_GIORNI,
+        GIORNI_MASSIMI_ACQUISTO,
+        BONUS_SOGLIA_GIORNI,
+        BONUS_GIORNI_MINIMO,
+        BONUS_GIORNI_MASSIMO,
+    )
+except ImportError:  # config.py non ancora aggiornato: default a listino
+    PREZZO_GIORNO_EUR = Decimal("299.00")
+    QUOTA_TOKEN_GIORNO_EUR = Decimal("20.00")
+    PACCHETTI_GIORNI = [7, 30, 90, 180, 365]
+    GIORNI_MASSIMI_ACQUISTO = 365
+    BONUS_SOGLIA_GIORNI = 30    # sotto questa soglia: nessun bonus
+    BONUS_GIORNI_MINIMO = 2     # bonus alla soglia (30 giorni -> 2 gratis)
+    BONUS_GIORNI_MASSIMO = 30   # bonus al massimo (365 giorni -> 30 gratis)
+
+
+def calcola_giorni_bonus(giorni_pagati: int) -> int:
+    """
+    Giorni di accesso GRATUITI con crescita lineare tra la soglia e il
+    massimo acquistabile: 30 giorni -> 2 gratis ... 365 giorni -> 30 gratis
+    (con i default). Sotto la soglia: nessun bonus. Arrotondamento per
+    difetto, così il totale non supera mai la retta di crescita.
+
+    Verifica con i pacchetti standard: 7->0, 30->2, 90->7, 180->14, 365->30.
+    """
+    if giorni_pagati < BONUS_SOGLIA_GIORNI:
+        return 0
+    ampiezza = GIORNI_MASSIMI_ACQUISTO - BONUS_SOGLIA_GIORNI
+    crescita = BONUS_GIORNI_MASSIMO - BONUS_GIORNI_MINIMO
+    bonus = BONUS_GIORNI_MINIMO + (giorni_pagati - BONUS_SOGLIA_GIORNI) * crescita / ampiezza
+    return min(int(bonus), BONUS_GIORNI_MASSIMO)
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +201,26 @@ class _PayPalClient:
                 "custom_id": user_id,
             }],
         }
+
+        # Flusso REDIRECT: con FRONTEND_URL configurata, PayPal sa dove
+        # rimandare l'utente dopo l'approvazione (aggiunge ?token=ORDER_ID
+        # all'URL di ritorno). Il flusso a bottoni JS SDK non ne è toccato:
+        # con i bottoni l'approvazione avviene in-page e il redirect non scatta.
+        frontend_url = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+        if frontend_url:
+            corpo["application_context"] = {
+                "brand_name": "CodeMorph.AI",
+                "user_action": "PAY_NOW",
+                "shipping_preference": "NO_SHIPPING",
+                "return_url": f"{frontend_url}/?paypal=success",
+                "cancel_url": f"{frontend_url}/?paypal=cancel",
+            }
+        else:
+            logger.warning(
+                "FRONTEND_URL non configurata: il checkout con redirect non "
+                "potrà rientrare nell'app (i bottoni JS SDK funzionano comunque)."
+            )
+
         risposta = self._chiama("POST", "/v2/checkout/orders", corpo)
         if risposta.status_code not in (200, 201):
             logger.error(
@@ -289,9 +359,9 @@ def verifica_credito_token(user_id) -> Optional[Decimal]:
     try:
         utente = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
         if utente.data and utente.data.get("role") == "admin":
-            # Usiamo float (9999.0) o Decimal se preferisci, per l'admin sarà infinito
-            return 9999.00  
-    except Exception as e:
+            # Decimal per coerenza con il resto del modulo: per l'admin è "infinito"
+            return Decimal("9999.00")
+    except Exception:
         # Se c'è un errore nella lettura dell'admin, passiamo sotto al controllo standard
         pass
     # --- FINE VIP PASS ADMIN ---
@@ -334,7 +404,6 @@ def addebita_consumo_token(user_id, tracker, session_id=None):
         utente = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
         if utente.data and utente.data.get("role") == "admin":
             # Per l'admin il costo è sempre 0 e il saldo rimane "infinito"
-            from decimal import Decimal
             return Decimal("0.00"), Decimal("9999.00")
     except Exception:
         pass
@@ -363,10 +432,10 @@ def addebita_consumo_token(user_id, tracker, session_id=None):
 # Licenze (pass giornaliero)
 # =====================================================================
 
-def _attiva_pass_giornaliero(user_id) -> datetime:
+def _attiva_pass(user_id, ore_totali: float) -> datetime:
     """
-    Crea la licenza per il pass appena pagato. Se l'utente ha già un pass
-    attivo, le 24 ore si ACCODANO alla scadenza corrente (non si perde
+    Crea/estende la licenza per il pass appena pagato. Se l'utente ha già un
+    pass attivo, le ore si ACCODANO alla scadenza corrente (non si perde
     quanto già pagato).
     """
     base = datetime.now(timezone.utc)
@@ -386,11 +455,16 @@ def _attiva_pass_giornaliero(user_id) -> datetime:
     except Exception as e:
         logger.warning("Lettura licenza esistente fallita per %s: %s (parto da adesso).", user_id, e)
 
-    scadenza = base + timedelta(hours=DURATA_PASS_ORE)
+    scadenza = base + timedelta(hours=ore_totali)
     supabase.table("user_licenses").insert(
         {"user_id": user_id, "expires_at": scadenza.isoformat()}
     ).execute()
     return scadenza
+
+
+def _attiva_pass_giornaliero(user_id) -> datetime:
+    """Pass 24h classico: caso particolare di _attiva_pass (retrocompatibilità)."""
+    return _attiva_pass(user_id, DURATA_PASS_ORE)
 
 
 def _marca_stato_ordine(order_id, stato):
@@ -405,10 +479,12 @@ def _marca_stato_ordine(order_id, stato):
 # =====================================================================
 
 class InputOrdine(BaseModel):
-    tipo: Literal["pass_giornaliero", "ricarica_token"]
+    tipo: Literal["pass_giornaliero", "pass_giorni", "ricarica_token"]
     metodo: Literal["paypal", "googlepay"] = "paypal"
-    # Solo per le ricariche: per il pass l'importo è fisso a listino
+    # Solo per le ricariche: per i pass l'importo è calcolato a listino
     importo_eur: Optional[float] = None
+    # Solo per pass_giorni: numero di giorni da acquistare (pacchetto o libero)
+    giorni: Optional[int] = None
 
 
 class InputCattura(BaseModel):
@@ -433,6 +509,19 @@ def configurazione_pagamenti(user_id: str = Depends(get_current_user)):
         "durata_pass_ore": DURATA_PASS_ORE,
         "ricarica_minima_eur": float(RICARICA_MINIMA_EUR),
         "ricarica_massima_eur": float(RICARICA_MASSIMA_EUR),
+        # Pass multi-giorno: parametri per l'anteprima nel frontend.
+        # Il calcolo AUTORITATIVO resta comunque lato server alla creazione ordine.
+        "pass_giorni": {
+            "prezzo_giorno_eur": float(PREZZO_GIORNO_EUR),
+            "quota_token_giorno_eur": float(QUOTA_TOKEN_GIORNO_EUR),
+            "pacchetti": PACCHETTI_GIORNI,
+            "giorni_massimi": GIORNI_MASSIMI_ACQUISTO,
+            "bonus": {
+                "soglia_giorni": BONUS_SOGLIA_GIORNI,
+                "minimo": BONUS_GIORNI_MINIMO,
+                "massimo": BONUS_GIORNI_MASSIMO,
+            },
+        },
     }
 
 
@@ -443,11 +532,32 @@ def crea_ordine_pagamento(richiesta: InputOrdine, user_id: str = Depends(get_cur
     Il frontend fa approvare l'ordine con il bottone PayPal o Google Pay
     del JS SDK PayPal e poi chiama /payments/cattura.
     """
+    giorni_pagati = None
+    giorni_bonus = None
+
     if richiesta.tipo == "pass_giornaliero":
         importo = PREZZO_PASS_GIORNALIERO_EUR
         descrizione = (
             f"CodeMorph.AI — Pass giornaliero {DURATA_PASS_ORE}h "
             f"(include {QUOTA_TOKEN_PASS_EUR:.0f} € di credito token)"
+        )
+    elif richiesta.tipo == "pass_giorni":
+        if richiesta.giorni is None:
+            raise HTTPException(status_code=400, detail="Indica il numero di giorni da acquistare (giorni).")
+        giorni_pagati = int(richiesta.giorni)
+        if not (1 <= giorni_pagati <= GIORNI_MASSIMI_ACQUISTO):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Il numero di giorni deve essere compreso tra 1 e {GIORNI_MASSIMI_ACQUISTO}.",
+            )
+        # Prezzo e bonus calcolati QUI, mai fidandosi di valori dal client
+        giorni_bonus = calcola_giorni_bonus(giorni_pagati)
+        importo = (PREZZO_GIORNO_EUR * giorni_pagati).quantize(_DUE_DECIMALI)
+        quota_token = (QUOTA_TOKEN_GIORNO_EUR * giorni_pagati).quantize(_DUE_DECIMALI)
+        etichetta_bonus = f" + {giorni_bonus} giorni bonus" if giorni_bonus else ""
+        descrizione = (
+            f"CodeMorph.AI — Pass {giorni_pagati} giorni{etichetta_bonus} "
+            f"(include {quota_token:.0f} € di credito token)"
         )
     else:
         if richiesta.importo_eur is None:
@@ -483,6 +593,10 @@ def crea_ordine_pagamento(richiesta: InputOrdine, user_id: str = Depends(get_cur
             "importo_eur": float(importo),
             "valuta": VALUTA_PAGAMENTI,
             "stato": "creato",
+            # Solo per pass_giorni (None altrove): l'erogazione in cattura
+            # legge QUESTI valori, non ricalcola da input del client.
+            "giorni_pagati": giorni_pagati,
+            "giorni_bonus": giorni_bonus,
         }).execute()
     except Exception as e:
         logger.error("Ordine PayPal %s non registrato su DB: %s", order_id, e)
@@ -503,6 +617,8 @@ def crea_ordine_pagamento(richiesta: InputOrdine, user_id: str = Depends(get_cur
         "metodo": richiesta.metodo,
         "importo_eur": float(importo),
         "valuta": VALUTA_PAGAMENTI,
+        "giorni_pagati": giorni_pagati,
+        "giorni_bonus": giorni_bonus,
     }
 
 
@@ -601,6 +717,39 @@ def cattura_pagamento(richiesta: InputCattura, user_id: str = Depends(get_curren
                 "metodo": ordine_db["metodo"],
                 "licenza_scade_il": scadenza.isoformat(),
                 "token_accreditati_eur": float(QUOTA_TOKEN_PASS_EUR),
+                "saldo_token_eur": float(saldo),
+            }
+
+        if ordine_db["tipo"] == "pass_giorni":
+            # I giorni vengono letti dall'ordine registrato alla creazione
+            # (calcolati lato server), MAI da input del client.
+            giorni_pagati = int(ordine_db.get("giorni_pagati") or 0)
+            giorni_bonus = int(ordine_db.get("giorni_bonus") or 0)
+            if giorni_pagati <= 0:
+                # Ordine registrato prima della migrazione SQL o corrotto
+                raise ValueError(f"Ordine pass_giorni senza giorni registrati: {richiesta.order_id}")
+
+            giorni_totali = giorni_pagati + giorni_bonus
+            scadenza = _attiva_pass(user_id, ore_totali=giorni_totali * 24)
+
+            quota_token = (QUOTA_TOKEN_GIORNO_EUR * giorni_pagati).quantize(_DUE_DECIMALI)
+            saldo = _modifica_saldo(user_id, quota_token)
+            _inserisci_movimento(
+                user_id, "accredito_pass", quota_token,
+                descrizione=(
+                    f"Credito token incluso nel pass {giorni_pagati} giorni "
+                    f"(+{giorni_bonus} bonus) — ordine {richiesta.order_id}"
+                ),
+            )
+            return {
+                "status": "success",
+                "tipo": "pass_giorni",
+                "metodo": ordine_db["metodo"],
+                "giorni_pagati": giorni_pagati,
+                "giorni_bonus": giorni_bonus,
+                "giorni_totali": giorni_totali,
+                "licenza_scade_il": scadenza.isoformat(),
+                "token_accreditati_eur": float(quota_token),
                 "saldo_token_eur": float(saldo),
             }
 
