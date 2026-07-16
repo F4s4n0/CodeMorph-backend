@@ -471,7 +471,11 @@ def _attiva_pass(user_id, ore_totali: float) -> datetime:
         logger.warning("Lettura licenza esistente fallita per %s: %s (parto da adesso).", user_id, e)
 
     scadenza = base + timedelta(hours=ore_totali)
-    supabase.table("user_licenses").insert(
+    # UPSERT, non insert: user_licenses ha la primary key su user_id (una
+    # sola riga per utente), quindi al rinnovo l'insert violerebbe la PK
+    # (errore 23505). La scadenza di partenza è già stata letta e accodata
+    # sopra, quindi sovrascrivere la riga con la nuova scadenza è corretto.
+    supabase.table("user_licenses").upsert(
         {"user_id": user_id, "expires_at": scadenza.isoformat()}
     ).execute()
     return scadenza
@@ -886,6 +890,56 @@ def cattura_pagamento(richiesta: InputCattura, user_id: str = Depends(get_curren
                 "Pagamento ricevuto ma attivazione fallita: contatta il supporto "
                 f"citando l'ordine {richiesta.order_id}."
             ),
+        )
+
+
+@router.post("/admin/payments/{order_id}/rieroga-anomalo")
+def rieroga_ordine_anomalo(order_id: str, user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Ri-eroga un ordine in stato 'anomalo' (pagamento incassato ma
+    attivazione fallita, es. per un errore DB poi risolto). Transizione
+    condizionata anomalo -> completato: una sola ri-erogazione può vincere.
+    """
+    _verifica_admin(user_id)
+
+    try:
+        risposta = supabase.table("payment_orders").select("*").eq("id", order_id).execute()
+    except Exception as e:
+        logger.error("Lettura ordine anomalo %s fallita: %s", order_id, e)
+        raise HTTPException(status_code=503, detail="Servizio ordini non disponibile.")
+
+    if not risposta.data:
+        raise HTTPException(status_code=404, detail="Ordine inesistente.")
+    ordine_db = risposta.data[0]
+
+    if ordine_db["stato"] != "anomalo":
+        raise HTTPException(
+            status_code=409,
+            detail=f"L'ordine è in stato '{ordine_db['stato']}', non 'anomalo': nessuna ri-erogazione necessaria.",
+        )
+
+    presa_in_carico = (
+        supabase.table("payment_orders")
+        .update({"stato": "completato", "completed_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", order_id)
+        .eq("stato", "anomalo")
+        .execute()
+    )
+    if not presa_in_carico.data:
+        return {"status": "gia_completato", "messaggio": "Ordine già ri-erogato da un'altra richiesta."}
+
+    try:
+        esito = _eroga_acquisto(ordine_db["user_id"], ordine_db, order_id)
+        esito["rierogato_da_admin"] = user_id
+        logger.info("Ordine anomalo %s ri-erogato con successo dall'admin %s", order_id, user_id)
+        return esito
+    except Exception:
+        # Ancora fallito: torna anomalo per un nuovo tentativo dopo il fix
+        _marca_stato_ordine(order_id, "anomalo")
+        logger.exception("Ri-erogazione fallita per l'ordine %s", order_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ri-erogazione fallita: controlla i log del server ({order_id}).",
         )
 
 
