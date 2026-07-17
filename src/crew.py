@@ -33,34 +33,27 @@ logger = logging.getLogger(__name__)
 # Helper di basso livello
 # =====================================================================
 
-def _salva_output_su_disco(tasks):
+def _salva_output_su_disco(tasks, output_dir):
     """
-    Scrive esplicitamente l'output di ogni task nel suo output_file.
-    CrewAI ha un comportamento incostante tra versioni con i percorsi
-    assoluti in output_file (a volte scrive dentro la cartella del
-    progetto invece che nel percorso indicato): scrivendo noi stessi,
-    la piattaforma è immune da questa classe di regressioni.
+    Scrive esplicitamente l'output di ogni task nella cartella di sessione.
+    ATTENZIONE: non fidarsi di task.output_file per la CARTELLA — le versioni
+    recenti di CrewAI sanificano i percorsi assoluti rimuovendo la '/' iniziale,
+    trasformandoli in relativi (finirebbero dentro la cartella del progetto).
+    Da output_file prendiamo SOLO il nome del file; la cartella è la nostra.
     """
     for task in tasks:
-        percorso = getattr(task, "output_file", None)
-        if not percorso:
+        percorso_task = getattr(task, "output_file", None)
+        if not percorso_task:
             continue
+        percorso = os.path.join(output_dir, os.path.basename(percorso_task))
         try:
             contenuto = getattr(task.output, "raw", None) or str(task.output)
-            os.makedirs(os.path.dirname(percorso), exist_ok=True)
+            os.makedirs(output_dir, exist_ok=True)
             with open(percorso, "w", encoding="utf-8") as f:
                 f.write(contenuto)
             logger.info("Output salvato: %s (%d caratteri)", percorso, len(contenuto))
         except Exception:
             logger.exception("Impossibile salvare l'output del task su %s", percorso)
-
-def _read_if_exists(path, fallback):
-    """Legge un file di contesto se esiste, altrimenti restituisce il fallback."""
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    logger.warning("File di contesto non trovato: %s — uso fallback.", path)
-    return fallback
 
 
 def _task_output_text(task):
@@ -140,7 +133,7 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
 
     annuncia_avvio()
     risultato = crew.kickoff(inputs={"codice_legacy": codice_legacy})
-    _salva_output_su_disco(tasks)
+    _salva_output_su_disco(tasks, output_dir)
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
     return risultato
@@ -188,7 +181,7 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
 
     annuncia_avvio()
     risultato = crew.kickoff(inputs={"linguaggio_target": linguaggio_target})
-    _salva_output_su_disco(tasks)
+    _salva_output_su_disco(tasks, output_dir)
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
     return risultato
@@ -368,7 +361,7 @@ def run_implementation_phase(
         try:
             annuncia_qa()
             risultato = qa_crew.kickoff()
-            _salva_output_su_disco(qa_tasks)
+            _salva_output_su_disco(qa_tasks, output_dir)
             if tracker is not None:
                 tracker.aggiungi_crew(qa_crew, risultato)
             report_qa.append(getattr(risultato, "raw", None) or str(risultato))
