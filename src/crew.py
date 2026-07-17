@@ -92,6 +92,13 @@ def _chunk_text(text, max_chars):
         chunks.append("".join(current))
     return chunks
 
+def _read_if_exists(path, fallback):
+    """Legge un file di contesto se esiste, altrimenti restituisce il fallback."""
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    logger.warning("File di contesto non trovato: %s — uso fallback.", path)
+    return fallback
 
 # =====================================================================
 # FASE 1 - UNDERSTANDING
