@@ -139,6 +139,32 @@ def _estrai_zip_sicuro(zip_path: Path, destinazione: Path):
                 )
         zip_ref.extractall(destinazione_abs)
 
+# File interni/ridondanti da NON includere negli zip consegnati all'utente
+FILE_ESCLUSI_DALLO_ZIP = {
+    "live_logs.txt",                  # log live: serve al terminale del frontend, non al deliverable
+    "solution_upload.zip",            # copia dello zip caricato dall'utente: ce l'ha già
+    "_implementation_checkpoint.json" # stato interno del resume della Fase 3
+}
+
+def _crea_zip_fase(percorso_base_senza_estensione, cartella_sessione, escludi_cartelle=()):
+    """
+    Crea lo zip di consegna di una fase escludendo i file interni
+    (FILE_ESCLUSI_DALLO_ZIP) e, opzionalmente, intere cartelle
+    (es. 'sorgenti_originali' negli zip dove non serve).
+    Sostituisce shutil.make_archive, che non supporta esclusioni.
+    """
+    percorso_zip = f"{percorso_base_senza_estensione}.zip"
+    with zipfile.ZipFile(percorso_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(cartella_sessione):
+            # Potatura delle cartelle escluse: modificare dirs "sul posto"
+            # impedisce a os.walk di scendere dentro di esse
+            dirs[:] = [d for d in dirs if d not in escludi_cartelle]
+            for nome in files:
+                if nome in FILE_ESCLUSI_DALLO_ZIP:
+                    continue
+                completo = os.path.join(root, nome)
+                zf.write(completo, os.path.relpath(completo, cartella_sessione))
+    return percorso_zip
 
 # =====================================================================
 # Credito token (quota inclusa nel pass + ricariche)
@@ -290,7 +316,7 @@ def fase1_understand(
         )
 
         log_message(session_id, "🗜️ Generazione del pacchetto ZIP del codice e dei report in corso...")
-        shutil.make_archive(str(WORKSPACE_DIR / f"{session_id}_fase1"), "zip", str(cartella_output))
+        _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase1"), str(cartella_output))
 
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
         log_message(session_id, "✨ [SUCCESS]: Fase 1 completata. Report pronti per l'ispezione umana.")
@@ -419,7 +445,7 @@ def fase2_design(
             tracker=tracker,
         )
 
-        shutil.make_archive(str(WORKSPACE_DIR / f"{session_id}_fase2"), "zip", str(cartella_output))
+        _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase2"),str(cartella_output),escludi_cartelle=("sorgenti_originali",),)
 
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
         log_message(
@@ -539,7 +565,7 @@ def fase3_implement(
         logger.info("Organizzazione del codice Frontend in cartelle fisiche...")
         n_frontend = unpack_markdown_to_files(str(cartella_output / FILE_FRONTEND_IMPL), str(cartella_output))
 
-        shutil.make_archive(str(WORKSPACE_DIR / f"{session_id}_finale"), "zip", str(cartella_output))
+        _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_finale"),str(cartella_output),escludi_cartelle=("sorgenti_originali",),)
 
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
         log_message(
