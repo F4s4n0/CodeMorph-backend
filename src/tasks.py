@@ -156,10 +156,11 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
     # 🛡️ PROTEZIONE: Disinnesca le graffe generate in Fase 1
     safe_contesto = _escape_braces(contesto_fase1)
 
+  # Il contenuto dei documenti arriva via inputs al kickoff, NON incollato
+    # qui: i documenti citano codice legacy pieno di graffe ({num1}, ecc.)
+    # che il template engine di CrewAI scambierebbe per placeholder.
     blocco_contesto = (
-        f"\n\nDOCUMENTAZIONE VALIDATA DELLA FASE DI UNDERSTANDING:\n{safe_contesto}\n"
-        if safe_contesto
-        else ""
+        "\n\nDOCUMENTAZIONE VALIDATA DELLA FASE DI UNDERSTANDING:\n{contesto_fase1}\n"
     )
 
     migration_plan_task = Task(

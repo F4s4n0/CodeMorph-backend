@@ -32,6 +32,24 @@ logger = logging.getLogger(__name__)
 # =====================================================================
 # Helper di basso livello
 # =====================================================================
+def _pulisci_output(contenuto):
+    """
+    Rimuove l'eventuale ragionamento interno dell'agente ("Thought: ...")
+    che CrewAI a volte lascia trapelare in testa all'output finale.
+    Il testo vero riparte dal primo titolo Markdown ('#'); in mancanza,
+    dal primo doppio a-capo. Se non troviamo un confine sicuro, meglio
+    lasciare tutto com'è che rischiare di tagliare contenuto buono.
+    """
+    if not contenuto.lstrip().startswith("Thought:"):
+        return contenuto
+    posizione_titolo = contenuto.find("#")
+    if posizione_titolo != -1:
+        return contenuto[posizione_titolo:]
+    posizione_paragrafo = contenuto.find("\n\n")
+    if posizione_paragrafo != -1:
+        return contenuto[posizione_paragrafo:].lstrip()
+    logger.warning("Output che inizia con 'Thought:' ma senza confine chiaro: lo lascio intatto.")
+    return contenuto
 
 def _salva_output_su_disco(tasks, output_dir):
     """
@@ -47,7 +65,7 @@ def _salva_output_su_disco(tasks, output_dir):
             continue
         percorso = os.path.join(output_dir, os.path.basename(percorso_task))
         try:
-            contenuto = getattr(task.output, "raw", None) or str(task.output)
+            contenuto = _task_output_text(task)
             os.makedirs(output_dir, exist_ok=True)
             with open(percorso, "w", encoding="utf-8") as f:
                 f.write(contenuto)
@@ -58,7 +76,7 @@ def _salva_output_su_disco(tasks, output_dir):
 
 def _task_output_text(task):
     """Estrae il testo dall'output di un Task (compatibile tra versioni CrewAI)."""
-    return getattr(task.output, "raw", None) or str(task.output)
+    return _pulisci_output(getattr(task.output, "raw", None) or str(task.output))
 
 
 def _load_checkpoint(path):
@@ -187,7 +205,10 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
     )
 
     annuncia_avvio()
-    risultato = crew.kickoff(inputs={"linguaggio_target": linguaggio_target})
+    risultato = crew.kickoff(inputs={
+        "linguaggio_target": linguaggio_target,
+        "contesto_fase1": contesto_fase1 or "Nessun documento di Fase 1 disponibile.",
+    })
     _salva_output_su_disco(tasks, output_dir)
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
