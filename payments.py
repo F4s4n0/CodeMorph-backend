@@ -815,6 +815,48 @@ def crea_ordine_pagamento(richiesta: InputOrdine, user_id: str = Depends(get_cur
     }
 
 
+ 
+@router.post("/payments/bonifici/{order_id}/conferma-invio")
+def conferma_invio_bonifico(order_id: str, user_id: str = Depends(get_current_user)):
+    """
+    Il CLIENTE dichiara di aver effettuato il bonifico: l'ordine passa da
+    'creato' (bozza) a 'in_attesa_bonifico' ed entra nella lista che
+    l'amministratore verifica contro l'estratto conto.
+    """
+    try:
+        risposta = supabase.table("payment_orders").select("*").eq("id", order_id).execute()
+    except Exception as e:
+        logger.error("Lettura ordine bonifico %s fallita: %s", order_id, e)
+        raise HTTPException(status_code=503, detail="Servizio ordini non disponibile.")
+ 
+    if not risposta.data:
+        raise HTTPException(status_code=404, detail="Ordine inesistente.")
+    ordine_db = risposta.data[0]
+ 
+    if ordine_db["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Questo ordine appartiene a un altro account.")
+    if ordine_db["metodo"] != "bonifico":
+        raise HTTPException(status_code=400, detail="Questo ordine non è un bonifico.")
+    if ordine_db["stato"] in ("in_attesa_bonifico", "completato"):
+        return {"status": "gia_confermato", "messaggio": "La conferma era già stata registrata."}
+ 
+    # Transizione condizionata: doppio click = una sola conferma vince
+    presa = (
+        supabase.table("payment_orders")
+        .update({"stato": "in_attesa_bonifico"})
+        .eq("id", order_id)
+        .eq("stato", "creato")
+        .execute()
+    )
+    if not presa.data:
+        return {"status": "gia_confermato", "messaggio": "La conferma era già stata registrata."}
+ 
+    return {
+        "status": "success",
+        "messaggio": "Conferma registrata: l'ordine è in attesa di verifica dell'incasso.",
+    }
+ 
+ 
 @router.post("/payments/cattura")
 def cattura_pagamento(richiesta: InputCattura, user_id: str = Depends(get_current_user)):
     """
