@@ -418,8 +418,8 @@ def fase2_design(
     if not cartella_output.exists() or not any(cartella_output.iterdir()):
     # Dopo un deploy/riavvio il disco è vuoto: prova il ripristino dai backup
         ripristinate = storage.ripristina_sessione(session_id, str(cartella_output))
-    if not ripristinate:
-        raise HTTPException(status_code=404, detail="Sessione non trovata. Elabora prima la Fase 1.")
+        if not ripristinate:
+            raise HTTPException(status_code=404, detail="Sessione non trovata. Elabora prima la Fase 1.")
     logger.info("Sessione %s ripristinata da Storage: %s", session_id, ripristinate)
 
     saldo_token = verifica_credito_token(user_id)
@@ -528,8 +528,8 @@ def fase3_implement(
     if not cartella_output.exists() or not any(cartella_output.iterdir()):
     # Dopo un deploy/riavvio il disco è vuoto: prova il ripristino dai backup
         ripristinate = storage.ripristina_sessione(session_id, str(cartella_output))
-    if not ripristinate:
-        raise HTTPException(status_code=404, detail="Sessione non trovata. Elabora prima la Fase 1.")
+        if not ripristinate:
+            raise HTTPException(status_code=404, detail="Sessione non trovata. Elabora prima la Fase 1.")
     logger.info("Sessione %s ripristinata da Storage: %s", session_id, ripristinate)
 
     saldo_token = verifica_credito_token(user_id)
