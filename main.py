@@ -420,7 +420,7 @@ def fase2_design(
         ripristinate = storage.ripristina_sessione(session_id, str(cartella_output))
         if not ripristinate:
             raise HTTPException(status_code=404, detail="Sessione non trovata. Elabora prima la Fase 1.")
-    logger.info("Sessione %s ripristinata da Storage: %s", session_id, ripristinate)
+        logger.info("Sessione %s ripristinata da Storage: %s", session_id, ripristinate)
 
     saldo_token = verifica_credito_token(user_id)
     tracker = TokenUsageTracker(richiesta.modello_llm)
@@ -530,7 +530,7 @@ def fase3_implement(
         ripristinate = storage.ripristina_sessione(session_id, str(cartella_output))
         if not ripristinate:
             raise HTTPException(status_code=404, detail="Sessione non trovata. Elabora prima la Fase 1.")
-    logger.info("Sessione %s ripristinata da Storage: %s", session_id, ripristinate)
+        logger.info("Sessione %s ripristinata da Storage: %s", session_id, ripristinate)
 
     saldo_token = verifica_credito_token(user_id)
     tracker = TokenUsageTracker(richiesta.modello_llm)
