@@ -30,6 +30,7 @@ Schema database: db/schema_pagamenti_token.sql + db/migrazione_pass_giorni.sql.
 
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -594,6 +595,17 @@ class InputCattura(BaseModel):
     order_id: str
 
 
+class InputProfiloFatturazione(BaseModel):
+    ragione_sociale: str
+    partita_iva: str
+    indirizzo: str
+    cap: str
+    citta: str
+    provincia: str
+    codice_sdi: Optional[str] = None
+    pec: Optional[str] = None
+
+
 # =====================================================================
 # Endpoint
 # =====================================================================
@@ -639,6 +651,17 @@ def crea_ordine_pagamento(richiesta: InputOrdine, user_id: str = Depends(get_cur
     Il frontend fa approvare l'ordine con il bottone PayPal o Google Pay
     del JS SDK PayPal e poi chiama /payments/cattura.
     """
+    # Obbligo fattura elettronica B2B: senza profilo di fatturazione completo
+    # nessun ordine può partire (né PayPal né bonifico). Lo snapshot del
+    # profilo viene salvato DENTRO l'ordine: la fattura deve riportare i dati
+    # validi al momento dell'acquisto.
+    profilo_fatturazione = _leggi_profilo_fatturazione(user_id)
+    if not profilo_fatturazione:
+        raise HTTPException(
+            status_code=400,
+            detail="Completa i dati di fatturazione prima di procedere all'acquisto.",
+        )
+
     giorni_pagati = None
     giorni_bonus = None
 
@@ -701,9 +724,10 @@ def crea_ordine_pagamento(richiesta: InputOrdine, user_id: str = Depends(get_cur
                 "metodo": "bonifico",
                 "importo_eur": float(importo),
                 "valuta": VALUTA_PAGAMENTI,
-                "stato": "in_attesa_bonifico",
+                "stato": "creato",  # bozza: diventa 'in_attesa_bonifico' solo alla conferma del cliente
                 "giorni_pagati": giorni_pagati,
                 "giorni_bonus": giorni_bonus,
+                "dati_fatturazione": profilo_fatturazione,
             }).execute()
         except Exception as e:
             logger.error("Ordine bonifico %s non registrato su DB: %s", order_id, e)
@@ -711,7 +735,7 @@ def crea_ordine_pagamento(richiesta: InputOrdine, user_id: str = Depends(get_cur
 
         return {
             "order_id": order_id,
-            "stato": "in_attesa_bonifico",
+            "stato": "creato",  # bozza: diventa 'in_attesa_bonifico' solo alla conferma del cliente
             "tipo": richiesta.tipo,
             "metodo": "bonifico",
             "importo_eur": float(importo),
@@ -725,8 +749,9 @@ def crea_ordine_pagamento(richiesta: InputOrdine, user_id: str = Depends(get_cur
                 # La causale È l'ID ordine: permette di abbinare l'incasso
                 "causale": order_id,
                 "nota": (
-                    "L'attivazione avviene alla conferma dell'incasso "
-                    "(tipicamente 1-2 giorni lavorativi dalla ricezione del bonifico)."
+                    "Dopo aver effettuato il bonifico, clicca 'Conferma' qui sotto: "
+                    "senza la tua conferma l'ordine non entra in lavorazione. "
+                    "L'attivazione avviene alla verifica dell'incasso (1-2 giorni lavorativi)."
                 ),
             },
         }
@@ -764,6 +789,7 @@ def crea_ordine_pagamento(richiesta: InputOrdine, user_id: str = Depends(get_cur
             # legge QUESTI valori, non ricalcola da input del client.
             "giorni_pagati": giorni_pagati,
             "giorni_bonus": giorni_bonus,
+            "dati_fatturazione": profilo_fatturazione,
         }).execute()
     except Exception as e:
         logger.error("Ordine PayPal %s non registrato su DB: %s", order_id, e)
@@ -891,6 +917,77 @@ def cattura_pagamento(richiesta: InputCattura, user_id: str = Depends(get_curren
                 f"citando l'ordine {richiesta.order_id}."
             ),
         )
+
+
+def _leggi_profilo_fatturazione(user_id):
+    """Ritorna il profilo di fatturazione dell'utente, o None se assente."""
+    try:
+        r = supabase.table("billing_profiles").select("*").eq("user_id", user_id).execute()
+        return r.data[0] if r.data else None
+    except Exception as e:
+        logger.error("Lettura profilo fatturazione fallita per %s: %s", user_id, e)
+        return None
+
+
+@router.get("/payments/profilo-fatturazione")
+def profilo_fatturazione(user_id: str = Depends(get_current_user)):
+    """Profilo di fatturazione dell'account (None se mai compilato)."""
+    return _leggi_profilo_fatturazione(user_id)
+
+
+@router.post("/payments/profilo-fatturazione")
+def salva_profilo_fatturazione(
+    dati: InputProfiloFatturazione,
+    user_id: str = Depends(get_current_user),
+):
+    """
+    Crea/aggiorna il profilo di fatturazione con validazione server-side:
+    P.IVA a 11 cifre, indirizzo completo, e Codice SDI (7 caratteri)
+    OPPURE PEC per il recapito della fattura elettronica.
+    """
+    rs = dati.ragione_sociale.strip()
+    piva = dati.partita_iva.strip()
+    sdi = (dati.codice_sdi or "").strip().upper()
+    pec = (dati.pec or "").strip().lower()
+
+    if not rs:
+        raise HTTPException(status_code=400, detail="Indica la ragione sociale.")
+    if not re.fullmatch(r"\d{11}", piva):
+        raise HTTPException(status_code=400, detail="La Partita IVA deve essere di 11 cifre.")
+    if not (dati.indirizzo.strip() and re.fullmatch(r"\d{5}", dati.cap.strip())
+            and dati.citta.strip() and re.fullmatch(r"[A-Za-z]{2}", dati.provincia.strip())):
+        raise HTTPException(
+            status_code=400,
+            detail="Completa indirizzo, CAP (5 cifre), città e provincia (2 lettere).",
+        )
+    if not sdi and not pec:
+        raise HTTPException(
+            status_code=400,
+            detail="Serve il Codice SDI oppure la PEC per il recapito della fattura elettronica.",
+        )
+    if sdi and not re.fullmatch(r"[A-Z0-9]{7}", sdi):
+        raise HTTPException(status_code=400, detail="Il Codice SDI deve essere di 7 caratteri alfanumerici.")
+    if pec and "@" not in pec:
+        raise HTTPException(status_code=400, detail="La PEC non è un indirizzo email valido.")
+
+    profilo = {
+        "user_id": user_id,
+        "ragione_sociale": rs,
+        "partita_iva": piva,
+        "indirizzo": dati.indirizzo.strip(),
+        "cap": dati.cap.strip(),
+        "citta": dati.citta.strip(),
+        "provincia": dati.provincia.strip().upper(),
+        "codice_sdi": sdi or None,
+        "pec": pec or None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        supabase.table("billing_profiles").upsert(profilo).execute()
+    except Exception as e:
+        logger.error("Salvataggio profilo fatturazione fallito per %s: %s", user_id, e)
+        raise HTTPException(status_code=500, detail="Salvataggio non riuscito: riprova.")
+    return profilo
 
 
 @router.post("/admin/payments/{order_id}/rieroga-anomalo")

@@ -3,6 +3,8 @@ import os
 import re
 import shutil
 import zipfile
+import storage
+
 from pathlib import Path
 from typing import Optional, List
 
@@ -316,7 +318,8 @@ def fase1_understand(
         )
 
         log_message(session_id, "🗜️ Generazione del pacchetto ZIP del codice e dei report in corso...")
-        _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase1"), str(cartella_output))
+        percorso_zip = _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase1"), str(cartella_output))
+        storage.salva_zip_fase(session_id, "fase1", percorso_zip)
 
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
         log_message(session_id, "✨ [SUCCESS]: Fase 1 completata. Report pronti per l'ispezione umana.")
@@ -412,8 +415,12 @@ def fase2_design(
     _verifica_proprieta_sessione(session_id, user_id)
 
     cartella_output = _cartella_sessione(session_id)
-    if not cartella_output.exists():
-        raise HTTPException(status_code=404, detail="Sessione non trovata. Carica prima la Fase 1.")
+    if not cartella_output.exists() or not any(cartella_output.iterdir()):
+    # Dopo un deploy/riavvio il disco è vuoto: prova il ripristino dai backup
+        ripristinate = storage.ripristina_sessione(session_id, str(cartella_output))
+    if not ripristinate:
+        raise HTTPException(status_code=404, detail="Sessione non trovata. Elabora prima la Fase 1.")
+    logger.info("Sessione %s ripristinata da Storage: %s", session_id, ripristinate)
 
     saldo_token = verifica_credito_token(user_id)
     tracker = TokenUsageTracker(richiesta.modello_llm)
@@ -445,7 +452,8 @@ def fase2_design(
             tracker=tracker,
         )
 
-        _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase2"),str(cartella_output),escludi_cartelle=("sorgenti_originali",),)
+        percorso_zip = _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase2"), str(cartella_output),escludi_cartelle=("sorgenti_originali",))
+        storage.salva_zip_fase(session_id, "fase2", percorso_zip)
 
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
         log_message(
@@ -517,8 +525,12 @@ def fase3_implement(
     cartella_output = _cartella_sessione(session_id)
     cartella_sorgenti = cartella_output / "sorgenti_originali"
 
-    if not cartella_output.exists():
-        raise HTTPException(status_code=404, detail="Sessione non trovata.")
+    if not cartella_output.exists() or not any(cartella_output.iterdir()):
+    # Dopo un deploy/riavvio il disco è vuoto: prova il ripristino dai backup
+        ripristinate = storage.ripristina_sessione(session_id, str(cartella_output))
+    if not ripristinate:
+        raise HTTPException(status_code=404, detail="Sessione non trovata. Elabora prima la Fase 1.")
+    logger.info("Sessione %s ripristinata da Storage: %s", session_id, ripristinate)
 
     saldo_token = verifica_credito_token(user_id)
     tracker = TokenUsageTracker(richiesta.modello_llm)
@@ -565,7 +577,8 @@ def fase3_implement(
         logger.info("Organizzazione del codice Frontend in cartelle fisiche...")
         n_frontend = unpack_markdown_to_files(str(cartella_output / FILE_FRONTEND_IMPL), str(cartella_output))
 
-        _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_finale"),str(cartella_output),escludi_cartelle=("sorgenti_originali",),)
+        percorso_zip = _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_finale"), str(cartella_output),escludi_cartelle=("sorgenti_originali",))
+        storage.salva_zip_fase(session_id, "finale", percorso_zip)
 
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
         log_message(
@@ -612,8 +625,10 @@ def scarica_file(
 
     zip_path = WORKSPACE_DIR / f"{session_id}_{mappa_nomi[fase]}.zip"
     if not zip_path.exists():
-        raise HTTPException(status_code=404, detail="File non trovato. Elabora la fase corrispondente.")
-
+        # Zip locale perso (deploy): prova a recuperarlo dal backup
+        if not storage.scarica_zip_fase(session_id, mappa_nomi[fase], str(zip_path)):
+            raise HTTPException(status_code=404, detail="File non trovato. Elabora la fase corrispondente.")
+    
     return FileResponse(
         path=str(zip_path),
         media_type="application/zip",
@@ -722,7 +737,7 @@ def admin_cancella_sessione(session_id: str, user_id: str = Depends(get_current_
         if cartella_sessione.exists() and cartella_sessione.is_dir():
             shutil.rmtree(cartella_sessione)
             logger.info("Cartella fisica eliminata: %s", cartella_sessione)
-
+            storage.elimina_backup_sessione(session_id)
         for suffisso in ["_fase1.zip", "_fase2.zip", "_finale.zip"]:
             zip_path = WORKSPACE_DIR / f"{session_id}{suffisso}"
             if zip_path.exists():
