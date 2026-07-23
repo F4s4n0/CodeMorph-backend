@@ -67,10 +67,12 @@ def get_understanding_tasks(agents, output_dir):
             + MERMAID_RULES
         ),
         expected_output=(
-            "Un report di 'Dependency Map' in formato Markdown che rappresenta "
-            "(testualmente, tramite tabelle strutturate o diagrammi Mermaid) il grafo "
-            "delle dipendenze, evidenziando i punti critici di accoppiamento e i "
-            "flussi dei dati."
+            "Un report di 'Dependency Map' in formato Markdown che DEVE "
+            "obbligatoriamente contenere: 1) un diagramma Mermaid (graph TD) "
+            "che visualizza il grafo delle dipendenze tra moduli, form, tabelle "
+            "e processi; 2) una tabella riassuntiva delle dipendenze; "
+            "3) l'evidenza dei punti critici di accoppiamento. "
+            "Un report senza il diagramma Mermaid è considerato incompleto."
         ),
         agent=agents["dependency_mapper"],
         context=[assessment_task],
