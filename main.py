@@ -5,6 +5,7 @@ import shutil
 import zipfile
 import storage
 
+
 from pathlib import Path
 from typing import Optional, List
 
@@ -29,6 +30,7 @@ from src.graph_builder import (
 from src.live_log import log_message
 from src.llm_config import get_llm
 from src.token_tracker import TokenUsageTracker
+from trial import router as trial_router
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -62,6 +64,8 @@ app.add_middleware(
 # Endpoint di pagamento e credito token (payments.py)
 app.include_router(payments_router)
 
+# Endpoint di trial
+app.include_router(trial_router)
 
 # =====================================================================
 # Modelli di input
