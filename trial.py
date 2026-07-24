@@ -201,7 +201,8 @@ def esegui_trial(richiesta: InputTrial, user_id: str = Depends(get_current_user)
             expected_output=(
                 "Un documento di 'Inventory' scritto INTERAMENTE IN ITALIANO, in formato "
                 "Markdown, che elenca gli asset identificati nell'estratto, con l'analisi "
-                "statica iniziale. Non usare l'inglese in nessuna sezione del documento."
+                "statica iniziale. Non usare l'inglese in nessuna sezione del documento.Concludi SEMPRE il documento: "
+                "meglio sintetico e finito che dettagliato e troncato."
             ),
             agent=agents["legacy_system_analyzer"],
         )
