@@ -10,7 +10,7 @@ from crewai import Crew, Process, Task
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from auth import get_current_user, supabase
+from auth import _parse_expiry, get_current_user, supabase   # ← aggiungi _parse_expiry
 from payments import _verifica_admin
 from src.agents import create_agents
 from src.llm_config import get_llm
@@ -21,24 +21,42 @@ router = APIRouter(prefix="/api/v1/trial")
 MAX_RIGHE = 50
 MAX_CARATTERI = 10_000  # 50 righe non possono valere 10k caratteri l'una
 
+def _ha_licenza_attiva(user_id):
+    """True se l'utente ha un pass ancora valido: in quel caso niente trial."""
+    try:
+        r = (supabase.table("user_licenses").select("expires_at")
+             .eq("user_id", user_id).order("expires_at", desc=True).limit(1).execute())
+        if not r.data:
+            return False
+        return _parse_expiry(r.data[0]["expires_at"]) > datetime.now(timezone.utc)
+    except Exception as e:
+        logger.warning("Verifica licenza per trial fallita (%s): %s", user_id, e)
+        return False
 
 class InputTrial(BaseModel):
     codice: str
 
 
+
+
 @router.get("/stato")
 def stato_trial(user_id: str = Depends(get_current_user)):
-    """disponibile = bonus concesso e non ancora usato."""
+    """disponibile = bonus concesso, non usato e SENZA licenza attiva."""
+    licenza_attiva = _ha_licenza_attiva(user_id)
     try:
         r = supabase.table("trial_bonuses").select("used_at").eq("user_id", user_id).execute()
     except Exception as e:
         logger.error("Lettura trial fallita per %s: %s", user_id, e)
         raise HTTPException(status_code=503, detail="Servizio non disponibile.")
     if not r.data:
-        return {"concesso": False, "disponibile": False, "usato": False}
+        return {"concesso": False, "disponibile": False, "usato": False, "licenza_attiva": licenza_attiva}
     usato = r.data[0]["used_at"] is not None
-    return {"concesso": True, "disponibile": not usato, "usato": usato}
-
+    return {
+        "concesso": True,
+        "disponibile": (not usato) and (not licenza_attiva),
+        "usato": usato,
+        "licenza_attiva": licenza_attiva,
+    }
 
 @router.post("/esegui")
 def esegui_trial(richiesta: InputTrial, user_id: str = Depends(get_current_user)):
@@ -52,6 +70,11 @@ def esegui_trial(richiesta: InputTrial, user_id: str = Depends(get_current_user)
         raise HTTPException(status_code=400, detail=f"La prova gratuita accetta al massimo {MAX_RIGHE} righe (ne hai incollate {len(righe)}).")
     if len(codice) > MAX_CARATTERI:
         raise HTTPException(status_code=400, detail="Codice troppo lungo per la prova gratuita.")
+    if _ha_licenza_attiva(user_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Hai già un pass attivo: usa la pipeline completa per analizzare il codice, la prova gratuita non è disponibile.",
+        )
 
     # Consumo ATOMICO del bonus PRIMA di lanciare l'IA: due richieste in
     # parallelo non possono usarlo entrambe (update condizionato su used_at NULL)
