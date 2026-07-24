@@ -32,7 +32,7 @@ MAX_CARATTERI = 10_000  # 50 righe non possono valere 10k caratteri l'una
 # Provider/modello della prova gratuita (a spese della piattaforma).
 # Configurabili da env per cambiarli senza deploy.
 TRIAL_PROVIDER = os.getenv("TRIAL_PROVIDER", "anthropic")
-TRIAL_MODEL = os.getenv("TRIAL_MODEL", "claude-haiku-4-5-20251001")
+TRIAL_MODEL = os.getenv("TRIAL_MODEL", "claude-sonnet-4-6")
 
 WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", "/tmp/workspace_sessioni"))
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
