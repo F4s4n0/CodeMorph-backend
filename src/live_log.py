@@ -18,15 +18,17 @@ timeline all'attività effettiva e non a un timer.
 import logging
 import os
 from datetime import datetime
-
+from zoneinfo import ZoneInfo
 from src.config import WORKSPACE_DIR
 
 logger = logging.getLogger(__name__)
 
+FUSO_ROMA = ZoneInfo("Europe/Rome")\
+
 
 def log_message(session_id, message):
     """Stampa il log sulla console server e lo accoda al file live della sessione."""
-    riga = f"[{datetime.now().strftime('%H:%M:%S')}] {message}"
+    riga = f"[{datetime.now(FUSO_ROMA).strftime('%H:%M:%S')}] {message}"
     print(riga)
 
     if not session_id:

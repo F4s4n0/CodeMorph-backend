@@ -21,6 +21,7 @@ from auth import _parse_expiry, get_current_user, supabase
 from payments import _verifica_admin
 from src.agents import create_agents
 from src.llm_config import get_llm
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/trial")
@@ -36,6 +37,7 @@ TRIAL_MODEL = os.getenv("TRIAL_MODEL", "claude-haiku-4-5-20251001")
 WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", "/tmp/workspace_sessioni"))
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
+FUSO_ROMA = ZoneInfo("Europe/Rome")
 
 # =====================================================================
 # Log dell'attività (file per utente, letto in polling dal frontend)
@@ -53,7 +55,7 @@ def _log(user_id, messaggio):
     try:
         percorso = _percorso_log(user_id)
         percorso.parent.mkdir(parents=True, exist_ok=True)
-        ora = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        ora = datetime.now(FUSO_ROMA).strftime("%H:%M:%S")
         with open(percorso, "a", encoding="utf-8") as f:
             f.write(f"[{ora}] {messaggio}\n")
     except Exception as e:
