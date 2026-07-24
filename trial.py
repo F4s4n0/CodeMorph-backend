@@ -89,7 +89,8 @@ def esegui_trial(richiesta: InputTrial, user_id: str = Depends(get_current_user)
         raise HTTPException(status_code=403, detail="La prova gratuita non è disponibile per questo account o è già stata utilizzata.")
 
     try:
-        llm = get_llm(provider="google", model_name="gemini-3.5-flash")
+        #llm = get_llm(provider="google", model_name="gemini-3.5-flash")
+        llm = get_llm(provider="anthropic", model_name="claude-haiku-4-5-20251001")
         agents = create_agents(llm)
         task = Task(
             description=(
