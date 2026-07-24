@@ -14,7 +14,7 @@ DEFAULT_TEMPERATURE = 0.2
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
 
-def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERATURE):
+def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERATURE, max_tokens=None):
     """
     Restituisce l'istanza corretta dell'LLM usando la classe nativa di CrewAI.
     Verifica prima la presenza della chiave API.
@@ -32,6 +32,7 @@ def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERAT
             model=f"ollama/{model_name}",
             base_url=os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL),
             temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     if provider not in _PROVIDERS:
@@ -49,4 +50,5 @@ def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERAT
         model=f"{prefisso}{model_name}",
         api_key=api_key,
         temperature=temperature,
+         max_tokens=max_tokens,
     )
