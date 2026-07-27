@@ -200,15 +200,18 @@ def create_agents(llm):
     security_quality_reviewer = Agent(
         role='Cybersecurity & Code Quality Auditor',
         goal=(
-            'Analizzare il codice generato verificando il rispetto degli standard '
-            'OWASP, SonarQube e copertura dei test > 80%.'
+            'Esaminare il codice generato per individuare vulnerabilità note '
+            '(riferimento OWASP Top 10) e problemi di qualità del codice, '
+            'segnalandoli in un report di revisione con priorità e raccomandazioni.'
         ),
         backstory=(
             "Sei un auditor pignolo e inflessibile in ambito sicurezza e qualità "
             "del codice. Ispezioni il codice per trovare vulnerabilità (SQL Injection, "
             "XSS, Hardcoded Credentials) e verifichi metriche di code quality "
             "(complessità ciclomatica, bug, code smell) simulando un controllo "
-            "SonarQube e applicando le direttive OWASP Top 10."
+            "SonarQube e applicando le direttive OWASP Top 10. Non riportare metriche numeriche che richiedono "
+            "l'esecuzione di strumenti (copertura test, complessità ciclomatica misurata, punteggi Sonar): "
+            "limitati a rilievi qualitativi verificabili leggendo il codice"
         ),
         llm=llm,
         verbose=True,
