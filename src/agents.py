@@ -247,4 +247,6 @@ def create_agents(llm):
         "senior_migration_developer": senior_migration_developer,
         "frontend_developer": frontend_developer,
         "security_quality_reviewer": security_quality_reviewer,
+        "quality_gate_auditor": quality_gate_auditor,
+
     }
