@@ -417,7 +417,6 @@ def ottieni_log_live(
 def fase2_design(
     richiesta: InputFase2,
     user_id: str = Depends(get_current_user_and_validate_license),
-    quality_gate: bool = Form(False),
 ):
     session_id = _valida_session_id(richiesta.session_id)
     _verifica_proprieta_sessione(session_id, user_id)
