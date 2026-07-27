@@ -16,6 +16,7 @@ from src.config import (
     FILE_FRONTEND_IMPL,
     FILE_IMPL_CHECKPOINT,
     FILE_QUALITY_REPORT,
+    FILE_TEST_BOOK,
     QA_CHUNK_MAX_CHARS,
     FILE_VALIDATION_FASE1,
     FILE_VALIDATION_FASE2,
@@ -260,6 +261,10 @@ def run_implementation_phase(
     # 1. Caricamento del contesto (ADR e schema DB generati in FASE 2)
     contesto_adr = _read_if_exists(f"{output_dir}/{FILE_MIGRATION_PLAN}", "Nessun ADR.")
     contesto_sql = _read_if_exists(f"{output_dir}/{FILE_DB_SCHEMA}", "Nessun DB Schema.")
+    # Requisiti funzionali e test attesi: senza questi il developer conosce
+    # l'architettura ma non COSA deve fare il software per l'utente.
+    contesto_funzionale = _read_if_exists(f"{output_dir}/{FILE_FUNCTIONAL_DOC}", "")
+    contesto_test = _read_if_exists(f"{output_dir}/{FILE_TEST_BOOK}", "")
 
     percorso_backend = f"{output_dir}/{FILE_BACKEND_IMPL}"
     percorso_frontend = f"{output_dir}/{FILE_FRONTEND_IMPL}"
@@ -305,6 +310,8 @@ def run_implementation_phase(
             contenuto_file_legacy=file_info["codice"],
             contesto_adr=contesto_adr,
             contesto_sql=contesto_sql,
+            contesto_funzionale=contesto_funzionale,
+            contesto_test=contesto_test,
         )
 
         annuncia_avvio, task_callback = crea_logger_attivita(

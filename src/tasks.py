@@ -241,6 +241,8 @@ def get_iterative_implementation_tasks(
     contenuto_file_legacy,
     contesto_adr,
     contesto_sql,
+    contesto_funzionale="",
+    contesto_test="",
 ):
     """
     Genera i task dinamicamente per UN SINGOLO file legacy,
@@ -251,6 +253,8 @@ def get_iterative_implementation_tasks(
     safe_legacy = _escape_braces(contenuto_file_legacy)
     safe_adr = _escape_braces(contesto_adr)
     safe_sql = _escape_braces(contesto_sql)
+    safe_funzionale = _escape_braces(contesto_funzionale)
+    safe_test = _escape_braces(contesto_test)
 
     backend_task = Task(
         description=f"""
@@ -265,6 +269,14 @@ def get_iterative_implementation_tasks(
         Usa SOLO le entità e i nomi colonna presenti in questo schema. Ignora le vecchie strutture dati legacy:
         {safe_sql}
 
+        REQUISITI FUNZIONALI DA IMPLEMENTARE (documentazione validata in Fase 1):
+        Il codice che scrivi deve soddisfare queste User Story e i relativi criteri di accettazione.
+        {safe_funzionale}
+
+        TEST CHE IL CODICE DOVRÀ SUPERARE:
+        Scrivi gli unit test coerenti con questi casi di test già definiti.
+        {safe_test}
+        
         FILE LEGACY DA ANALIZZARE ({nome_file_legacy}):
         {safe_legacy}
 
@@ -291,6 +303,9 @@ def get_iterative_implementation_tasks(
 
         REGOLE ARCHITETTURALI:
         {safe_adr}
+
+        REQUISITI FUNZIONALI E UX ATTESA:
+        {safe_funzionale}
 
         FILE LEGACY ORIGINALE (per capire l'intento della UX):
         {safe_legacy}
