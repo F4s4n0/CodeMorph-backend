@@ -127,7 +127,7 @@ def _read_if_exists(path, fallback):
 # FASE 1 - UNDERSTANDING
 # =====================================================================
 
-def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tracker=None):
+def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tracker=None, quality_gate=False):
     """
     Esegue la FASE 1: Understanding.
     Crea l'inventario, la mappa delle dipendenze, la documentazione e il test book.
@@ -166,11 +166,12 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
     _salva_output_su_disco(tasks, output_dir)
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
-    _valida_fase(
-        llm, output_dir, "Fase 1 · Understanding",
-        [FILE_ASSESSMENT, FILE_DEPENDENCY_MAP, FILE_TECH_DOC, FILE_FUNCTIONAL_DOC],
-        FILE_VALIDATION_FASE1, session_id, tracker,
-    )
+    if quality_gate:
+        _valida_fase(
+            llm, output_dir, "Fase 1 · Understanding",
+            [FILE_ASSESSMENT, FILE_DEPENDENCY_MAP, FILE_TECH_DOC, FILE_FUNCTIONAL_DOC],
+            FILE_VALIDATION_FASE1, session_id, tracker,
+        )
     return risultato
 
 
@@ -178,7 +179,7 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
 # FASE 2 - DESIGN
 # =====================================================================
 
-def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracker=None):
+def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracker=None, quality_gate=False):
     """
     Esegue la FASE 2: Design.
     Rilegge da disco i documenti validati della fase 1 (le Crew sono isolate
@@ -222,11 +223,12 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
     _salva_output_su_disco(tasks, output_dir)
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
-    _valida_fase(
-        llm, output_dir, "Fase 2 · Design",
-        [FILE_MIGRATION_PLAN, FILE_DB_SCHEMA],
-        FILE_VALIDATION_FASE2, session_id, tracker,
-    )
+    if quality_gate:
+        _valida_fase(
+            llm, output_dir, "Fase 2 · Design",
+            [FILE_MIGRATION_PLAN, FILE_DB_SCHEMA],
+            FILE_VALIDATION_FASE2, session_id, tracker,
+        )
     return risultato
 
 # =====================================================================
@@ -240,6 +242,7 @@ def run_implementation_phase(
     lista_file_legacy_estratti,
     session_id=None,
     tracker=None,
+    quality_gate=False
 ):
     """
     Esegue la FASE 3: per ogni file legacy genera backend e frontend target,
@@ -418,11 +421,12 @@ def run_implementation_phase(
         f"📈 Fase 3: pipeline completata — {len(esiti['completati'])} migrati, "
         f"{len(esiti['falliti'])} falliti, {len(esiti['saltati'])} saltati.",
     )
-    validazione = _valida_fase(
-        llm, output_dir, "Fase 3 · Implementation",
-        [FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_QUALITY_REPORT],
-        FILE_VALIDATION_FASE3, session_id, tracker,
-    )
+    if quality_gate:
+        validazione = _valida_fase(
+            llm, output_dir, "Fase 3 · Implementation",
+            [FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_QUALITY_REPORT],
+            FILE_VALIDATION_FASE3, session_id, tracker,
+        )
     if validazione:
         esiti["validazione"] = validazione["esito"]
     return esiti

@@ -76,13 +76,14 @@ class InputFase2(BaseModel):
     linguaggio_target: str
     provider_llm: str = "openai"
     modello_llm: str = "gpt-4o"
-
+    quality_gate: bool = False
 
 class InputFase3(BaseModel):
     session_id: str
     linguaggio_target: str
     provider_llm: str = "openai"
     modello_llm: str = "gpt-4o"
+    quality_gate: bool = False
 
 
 # =====================================================================
@@ -244,6 +245,7 @@ def fase1_understand(
     file: Optional[UploadFile] = File(None),
     codice_legacy: Optional[str] = Form(None),
     user_id: str = Depends(get_current_user_and_validate_license),
+    quality_gate: bool = Form(False),
 ):
     session_id = _valida_session_id(session_id)
     _verifica_proprieta_sessione(session_id, user_id)
@@ -319,6 +321,7 @@ def fase1_understand(
             output_dir=str(cartella_output),
             session_id=session_id,
             tracker=tracker,
+            quality_gate=quality_gate,
         )
 
         log_message(session_id, "🗜️ Generazione del pacchetto ZIP del codice e dei report in corso...")
@@ -414,6 +417,7 @@ def ottieni_log_live(
 def fase2_design(
     richiesta: InputFase2,
     user_id: str = Depends(get_current_user_and_validate_license),
+    quality_gate: bool = Form(False),
 ):
     session_id = _valida_session_id(richiesta.session_id)
     _verifica_proprieta_sessione(session_id, user_id)
@@ -454,6 +458,8 @@ def fase2_design(
             output_dir=str(cartella_output),
             session_id=session_id,
             tracker=tracker,
+            quality_gate=richiesta.quality_gate,
+
         )
 
         percorso_zip = _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase2"), str(cartella_output),escludi_cartelle=("sorgenti_originali",))
@@ -571,6 +577,8 @@ def fase3_implement(
             lista_file_legacy_estratti=lista_file_legacy,
             session_id=session_id,
             tracker=tracker,
+            quality_gate=richiesta.quality_gate,
+
         )
 
         # Sconfezionamento del codice generato in file fisici
