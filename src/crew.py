@@ -427,8 +427,8 @@ def run_implementation_phase(
             [FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_QUALITY_REPORT],
             FILE_VALIDATION_FASE3, session_id, tracker,
         )
-    if validazione:
-        esiti["validazione"] = validazione["esito"]
+        if validazione:
+            esiti["validazione"] = validazione["esito"]
     return esiti
 
 
