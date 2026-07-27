@@ -135,6 +135,7 @@ def get_understanding_tasks(agents, output_dir):
         output_file=f"{output_dir}/{FILE_TEST_BOOK}",
     )
 
+
     return [
         assessment_task,
         map_dependency_task,
@@ -357,3 +358,43 @@ def get_quality_check_task(
     )
 
     return [quality_check_task]
+
+# =====================================================================
+# validatore dei task
+# =====================================================================
+
+def get_validation_task(agent, output_dir, nome_fase, output_filename):
+    """
+    Task di validazione documentale (Quality Gate).
+    NOTA: il contenuto dei documenti NON va concatenato qui — arriva via
+    inputs del kickoff come {contenuto_fase}, altrimenti le graffe presenti
+    nel codice legacy citato verrebbero scambiate per template variable.
+    """
+    return [Task(
+        description=(
+            f"Sei il Quality Gate della fase '{nome_fase}'. Di seguito trovi i "
+            "documenti prodotti dagli agenti in questa fase:\n\n"
+            "{contenuto_fase}\n\n"
+            "Valuta questi documenti secondo i criteri seguenti:\n"
+            "1. COMPLETEZZA: ogni documento copre ciò che dichiara di coprire? "
+            "Ci sono sezioni vuote, troncate o dichiarate e non sviluppate?\n"
+            "2. COERENZA INTERNA: i documenti si contraddicono tra loro? "
+            "I riferimenti incrociati (nomi di file, tabelle, moduli) coincidono?\n"
+            "3. AFFIDABILITÀ: ci sono affermazioni generiche o non supportate dal "
+            "codice analizzato (allucinazioni, componenti mai citati nel sorgente)?\n"
+            "4. UTILIZZABILITÀ: la fase successiva ha tutto ciò che le serve per "
+            "lavorare senza dover indovinare?\n\n"
+            "Scrivi in ITALIANO. Sii concreto: cita il documento e la sezione per "
+            "ogni rilievo. Non riscrivere i documenti, non aggiungere analisi tue."
+        ),
+        expected_output=(
+            "Un report di validazione in Markdown che inizia OBBLIGATORIAMENTE con "
+            "una riga nel formato esatto:\n"
+            "ESITO: PROMOSSO  (oppure)  ESITO: PROMOSSO CON RISERVA  (oppure)  ESITO: BOCCIATO\n\n"
+            "Seguono: una sintesi di 3-4 righe, la tabella dei rilievi "
+            "(documento | criticità | gravità alta/media/bassa) e le azioni "
+            "consigliate. Massimo 800 parole: è un verdetto, non un trattato."
+        ),
+        agent=agent,
+        output_file=f"{output_dir}/{output_filename}",
+    )]

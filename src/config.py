@@ -34,6 +34,10 @@ FILE_MIGRATION_PLAN   = "5_Migration_Plan_ADR.md"
 FILE_BACKEND_IMPL     = "6a_Backend_Project_Implementation.md"
 FILE_FRONTEND_IMPL    = "6b_Frontend_Project_Implementation.md"
 FILE_QUALITY_REPORT   = "7_Quality_Check_Report.md"
+FILE_VALIDATION_FASE1 = "8_Validation_Report_Fase1.md"
+FILE_VALIDATION_FASE2 = "9_Validation_Report_Fase2.md"
+FILE_VALIDATION_FASE3 = "10_Validation_Report_Fase3.md"
+VALIDAZIONE_MAX_CHARS = 40000   # tetto al contesto inviato al validatore
 
 # File di checkpoint per la fase iterativa (permette il resume dopo un crash)
 FILE_IMPL_CHECKPOINT  = "_implementation_checkpoint.json"

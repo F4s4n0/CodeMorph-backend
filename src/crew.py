@@ -17,6 +17,10 @@ from src.config import (
     FILE_IMPL_CHECKPOINT,
     FILE_QUALITY_REPORT,
     QA_CHUNK_MAX_CHARS,
+    FILE_VALIDATION_FASE1,
+    FILE_VALIDATION_FASE2,
+    FILE_VALIDATION_FASE3,
+    VALIDAZIONE_MAX_CHARS,
 )
 from src.live_log import crea_logger_attivita, log_message
 from src.tasks import (
@@ -24,6 +28,7 @@ from src.tasks import (
     get_design_tasks,
     get_iterative_implementation_tasks,
     get_quality_check_task,
+    get_validation_task,
 )
 
 logger = logging.getLogger(__name__)
@@ -161,6 +166,11 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
     _salva_output_su_disco(tasks, output_dir)
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
+    _valida_fase(
+        llm, output_dir, "Fase 1 · Understanding",
+        [FILE_ASSESSMENT, FILE_DEPENDENCY_MAP, FILE_TECH_DOC, FILE_FUNCTIONAL_DOC],
+        FILE_VALIDATION_FASE1, session_id, tracker,
+    )
     return risultato
 
 
@@ -212,8 +222,12 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
     _salva_output_su_disco(tasks, output_dir)
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
+    _valida_fase(
+        llm, output_dir, "Fase 2 · Design",
+        [FILE_MIGRATION_PLAN, FILE_DB_SCHEMA],
+        FILE_VALIDATION_FASE2, session_id, tracker,
+    )
     return risultato
-
 
 # =====================================================================
 # FASE 3 - IMPLEMENTATION (iterativa) + QUALITY CHECK
@@ -404,4 +418,72 @@ def run_implementation_phase(
         f"📈 Fase 3: pipeline completata — {len(esiti['completati'])} migrati, "
         f"{len(esiti['falliti'])} falliti, {len(esiti['saltati'])} saltati.",
     )
+    validazione = _valida_fase(
+        llm, output_dir, "Fase 3 · Implementation",
+        [FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_QUALITY_REPORT],
+        FILE_VALIDATION_FASE3, session_id, tracker,
+    )
+    if validazione:
+        esiti["validazione"] = validazione["esito"]
     return esiti
+
+
+def _valida_fase(llm, output_dir, nome_fase, file_da_validare, nome_report,
+                 session_id=None, tracker=None):
+    """
+    Quality Gate: un revisore indipendente valuta i documenti appena prodotti
+    ed emette un verdetto motivato, salvato come report nella cartella di sessione.
+    NON blocca la pipeline e non fa rifare il lavoro: documenta.
+    Ritorna {"esito": ..., "report": ...} oppure None se non c'è nulla da validare.
+    """
+    documenti = []
+    for nome in file_da_validare:
+        contenuto = _read_if_exists(f"{output_dir}/{nome}", "")
+        if contenuto:
+            documenti.append(f"### {nome}\n{contenuto}")
+    if not documenti:
+        logger.warning("Validazione %s saltata: nessun documento trovato.", nome_fase)
+        return None
+
+    contenuto_fase = "\n\n".join(documenti)
+    if len(contenuto_fase) > VALIDAZIONE_MAX_CHARS:
+        contenuto_fase = contenuto_fase[:VALIDAZIONE_MAX_CHARS] + "\n\n[...contenuto troncato per limiti di contesto...]"
+
+    agents = create_agents(llm)
+    tasks = get_validation_task(
+        agent=agents["quality_gate_auditor"],
+        output_dir=output_dir,
+        nome_fase=nome_fase,
+        output_filename=nome_report,
+    )
+    annuncia, callback = crea_logger_attivita(
+        session_id, tasks, etichetta=f"Quality Gate · {nome_fase}"
+    )
+    crew = Crew(
+        agents=[agents["quality_gate_auditor"]],
+        tasks=tasks,
+        process=Process.sequential,
+        verbose=False,
+        memory=False,
+        task_callback=callback,
+    )
+
+    try:
+        log_message(session_id, f"🔎 Quality Gate: validazione dei documenti della {nome_fase} in corso...")
+        annuncia()
+        # Il contenuto passa da inputs: mai concatenato nella description
+        risultato = crew.kickoff(inputs={"contenuto_fase": contenuto_fase})
+        _salva_output_su_disco(tasks, output_dir)
+        if tracker is not None:
+            tracker.aggiungi_crew(crew, risultato)
+
+        report = _pulisci_output(getattr(risultato, "raw", None) or str(risultato))
+        prima_riga = report.strip().splitlines()[0] if report.strip() else ""
+        esito = prima_riga.replace("ESITO:", "").strip() if "ESITO:" in prima_riga.upper() else "NON DETERMINATO"
+        log_message(session_id, f"🔎 Quality Gate {nome_fase}: {esito}")
+        return {"esito": esito, "report": report}
+    except Exception:
+        # La validazione è un di più: se fallisce, la pipeline prosegue
+        logger.exception("Quality Gate fallito per la %s.", nome_fase)
+        log_message(session_id, f"⚠️ Quality Gate {nome_fase} non riuscito: la fase resta valida, verifica manualmente i documenti.")
+        return None
