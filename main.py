@@ -264,7 +264,7 @@ def stato_esecuzione(session_id: str, user_id: str = Depends(get_current_user)):
     _verifica_proprieta_sessione(session_id, user_id)
     try:
         r = (supabase.table("migration_sessions")
-             .select("stato_esecuzione,fase_in_corso,errore_messaggio,risultato,status")
+             .select("stato_esecuzione,fase_in_corso,errore_messaggio,risultato,current_step")
              .eq("id", session_id).execute())
     except Exception as e:
         logger.error("Lettura stato esecuzione fallita per %s: %s", session_id, e)
@@ -370,11 +370,11 @@ def fase1_understand(
 
     # Registrazione della sessione (come prima)
     try:
-        supabase.table("migration_sessions").upsert({
+       supabase.table("migration_sessions").upsert({
             "id": session_id,
             "user_id": user_id,
             "session_name": session_name,
-            "status": "INPUT",
+            "current_step": "input",
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
     except Exception as e:
