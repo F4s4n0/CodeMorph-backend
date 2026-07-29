@@ -453,8 +453,64 @@ def ottieni_log_live(
 # FASE 2: DESIGN (dopo il Checkpoint 1)
 # =====================================================================
 
-@app.post("/api/v1/modernize/design")
+def _lavoro_fase2(session_id, user_id, provider_llm, modello_llm,
+                  linguaggio_target, quality_gate):
+    """Elaborazione della Fase 2 in background. Non solleva: registra l'esito su DB."""
+    tracker = TokenUsageTracker(modello_llm)
+    cartella_output = _cartella_sessione(session_id)
+
+    try:
+        _imposta_stato_esecuzione(session_id, "running", fase="fase2")
+        log_message(
+            session_id,
+            f"🏛️ Avvio Fase 2 (Design): architettura e piano di migrazione verso {linguaggio_target}...",
+        )
+
+        llm = get_llm(provider=provider_llm, model_name=modello_llm)
+        run_design_phase(
+            llm=llm,
+            linguaggio_target=linguaggio_target,
+            output_dir=str(cartella_output),
+            session_id=session_id,
+            tracker=tracker,
+            quality_gate=quality_gate,
+        )
+
+        percorso_zip = _crea_zip_fase(
+            str(WORKSPACE_DIR / f"{session_id}_fase2"), str(cartella_output),
+            escludi_cartelle=("sorgenti_originali",),
+        )
+        storage.salva_zip_fase(session_id, "fase2", percorso_zip)
+
+        blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
+        log_message(session_id, "✨ [SUCCESS]: Fase 2 completata. Migration Plan e Schema DB pronti per il Checkpoint 2 umano.")
+
+        # current_step avanza SOLO ora che il lavoro è davvero finito
+        try:
+            supabase.table("migration_sessions").upsert({
+                "id": session_id,
+                "user_id": user_id,
+                "current_step": "cp2",
+                "linguaggio_target": linguaggio_target,
+            }).execute()
+        except Exception as e:
+            logger.error("Aggiornamento current_step fallito per %s: %s", session_id, e)
+
+        _imposta_stato_esecuzione(
+            session_id, "completata", fase="fase2",
+            risultato={"token": blocco_token,
+                       "url_download": f"/api/v1/modernize/download/{session_id}/2"},
+        )
+    except Exception as e:
+        _chiudi_conteggio_token(user_id, tracker, session_id)
+        logger.exception("Errore in Fase 2, sessione %s", session_id)
+        log_message(session_id, f"❌ ERRORE CRITICO IN FASE 2: {e}")
+        _imposta_stato_esecuzione(session_id, "errore", fase="fase2", errore=str(e))
+
+
+@app.post("/api/v1/modernize/design", status_code=202)
 def fase2_design(
+    background_tasks: BackgroundTasks,
     richiesta: InputFase2,
     user_id: str = Depends(get_current_user_and_validate_license),
 ):
@@ -463,68 +519,23 @@ def fase2_design(
 
     cartella_output = _cartella_sessione(session_id)
     if not cartella_output.exists() or not any(cartella_output.iterdir()):
-    # Dopo un deploy/riavvio il disco è vuoto: prova il ripristino dai backup
+        # Dopo un deploy/riavvio il disco è vuoto: prova il ripristino dai backup
         ripristinate = storage.ripristina_sessione(session_id, str(cartella_output))
         if not ripristinate:
             raise HTTPException(status_code=404, detail="Sessione non trovata. Elabora prima la Fase 1.")
         logger.info("Sessione %s ripristinata da Storage: %s", session_id, ripristinate)
 
     saldo_token = verifica_credito_token(user_id)
-    tracker = TokenUsageTracker(richiesta.modello_llm)
+    if saldo_token is not None:
+        log_message(session_id, f"🪙 Credito token disponibile: {saldo_token:.2f} €.")
 
-    try:
-        supabase.table("migration_sessions").upsert({
-            "id": session_id,
-            "user_id": user_id,
-            "current_step": "cp2",
-            "linguaggio_target": richiesta.linguaggio_target,
-        }).execute()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore salvataggio sessione Supabase: {e}")
-
-    try:
-        if saldo_token is not None:
-            log_message(session_id, f"🪙 Credito token disponibile: {saldo_token:.2f} €.")
-        log_message(
-            session_id,
-            f"🏛️ Avvio Fase 2 (Design): architettura e piano di migrazione verso {richiesta.linguaggio_target}...",
-        )
-
-        llm = get_llm(provider=richiesta.provider_llm, model_name=richiesta.modello_llm)
-        run_design_phase(
-            llm=llm,
-            linguaggio_target=richiesta.linguaggio_target,
-            output_dir=str(cartella_output),
-            session_id=session_id,
-            tracker=tracker,
-            quality_gate=richiesta.quality_gate,
-
-        )
-
-        percorso_zip = _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase2"), str(cartella_output),escludi_cartelle=("sorgenti_originali",))
-        storage.salva_zip_fase(session_id, "fase2", percorso_zip)
-
-        blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
-        log_message(
-            session_id,
-            "✨ [SUCCESS]: Fase 2 completata. Migration Plan e Schema DB pronti per il Checkpoint 2 umano.",
-        )
-
-        return {
-            "status": "success",
-            "messaggio": "Fase 2 (Design) completata. In attesa del CHECK POINT 2 umano.",
-            "session_id": session_id,
-            "token": blocco_token,
-            "url_download_report": f"/api/v1/modernize/download/{session_id}/2",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        _chiudi_conteggio_token(user_id, tracker, session_id)
-        log_message(session_id, f"❌ ERRORE CRITICO IN FASE 2: {e}")
-        logger.exception("Errore in Fase 2, sessione %s", session_id)
-        raise HTTPException(status_code=500, detail=str(e))
-
+    _imposta_stato_esecuzione(session_id, "running", fase="fase2")
+    background_tasks.add_task(
+        _lavoro_fase2, session_id, user_id,
+        richiesta.provider_llm, richiesta.modello_llm,
+        richiesta.linguaggio_target, richiesta.quality_gate,
+    )
+    return {"status": "avviata", "session_id": session_id}
 
 # =====================================================================
 # FASE 3: IMPLEMENTATION (dopo il Checkpoint 2)
@@ -563,8 +574,80 @@ def _carica_file_legacy(cartella_sorgenti: Path):
     return lista
 
 
-@app.post("/api/v1/modernize/implement")
+def _lavoro_fase3(session_id, user_id, provider_llm, modello_llm,
+                  linguaggio_target, quality_gate):
+    """Elaborazione della Fase 3 in background. Non solleva: registra l'esito su DB."""
+    tracker = TokenUsageTracker(modello_llm)
+    cartella_output = _cartella_sessione(session_id)
+    cartella_sorgenti = cartella_output / "sorgenti_originali"
+
+    try:
+        _imposta_stato_esecuzione(session_id, "running", fase="fase3")
+        log_message(
+            session_id,
+            f"⚙️ Avvio Fase 3 (Implementation): generazione del codice {linguaggio_target}...",
+        )
+
+        llm = get_llm(provider=provider_llm, model_name=modello_llm)
+
+        lista_file_legacy = _carica_file_legacy(cartella_sorgenti)
+        if not lista_file_legacy:
+            lista_file_legacy = [{"nome": "pasted_code.txt", "codice": "Nessun codice trovato."}]
+
+        esiti = run_implementation_phase(
+            llm=llm,
+            linguaggio_target=linguaggio_target,
+            output_dir=str(cartella_output),
+            lista_file_legacy_estratti=lista_file_legacy,
+            session_id=session_id,
+            tracker=tracker,
+            quality_gate=quality_gate,
+        )
+
+        log_message(session_id, "🗜️ Sconfezionamento del codice generato in file fisici e ZIP finale...")
+        n_backend = unpack_markdown_to_files(str(cartella_output / FILE_BACKEND_IMPL), str(cartella_output))
+        n_frontend = unpack_markdown_to_files(str(cartella_output / FILE_FRONTEND_IMPL), str(cartella_output))
+
+        percorso_zip = _crea_zip_fase(
+            str(WORKSPACE_DIR / f"{session_id}_finale"), str(cartella_output),
+            escludi_cartelle=("sorgenti_originali",),
+        )
+        storage.salva_zip_fase(session_id, "finale", percorso_zip)
+
+        blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
+        log_message(session_id, "✨ [SUCCESS]: Fase 3 completata. Progetto pronto per il Testing & Deployment umano.")
+
+        try:
+            supabase.table("migration_sessions").upsert({
+                "id": session_id,
+                "user_id": user_id,
+                "current_step": "final",
+                "linguaggio_target": linguaggio_target,
+            }).execute()
+        except Exception as e:
+            logger.error("Aggiornamento current_step fallito per %s: %s", session_id, e)
+
+        _imposta_stato_esecuzione(
+            session_id, "completata", fase="fase3",
+            risultato={
+                "token": blocco_token,
+                "file_migrati": esiti["completati"],
+                "file_falliti": esiti["falliti"],
+                "file_saltati_da_checkpoint": esiti["saltati"],
+                "file_sorgente_estratti": {"backend": n_backend, "frontend": n_frontend},
+                "url_download": f"/api/v1/modernize/download/{session_id}/3",
+            },
+        )
+    except Exception as e:
+        _chiudi_conteggio_token(user_id, tracker, session_id)
+        logger.exception("Errore in Fase 3, sessione %s", session_id)
+        log_message(session_id, f"❌ ERRORE CRITICO IN FASE 3: {e}")
+        _imposta_stato_esecuzione(session_id, "errore", fase="fase3", errore=str(e))
+
+
+@app.post("/api/v1/modernize/implement", status_code=202)
 def fase3_implement(
+    background_tasks: BackgroundTasks,
     richiesta: InputFase3,
     user_id: str = Depends(get_current_user_and_validate_license),
 ):
@@ -572,90 +655,24 @@ def fase3_implement(
     _verifica_proprieta_sessione(session_id, user_id)
 
     cartella_output = _cartella_sessione(session_id)
-    cartella_sorgenti = cartella_output / "sorgenti_originali"
-
     if not cartella_output.exists() or not any(cartella_output.iterdir()):
-    # Dopo un deploy/riavvio il disco è vuoto: prova il ripristino dai backup
+        # Dopo un deploy/riavvio il disco è vuoto: prova il ripristino dai backup
         ripristinate = storage.ripristina_sessione(session_id, str(cartella_output))
         if not ripristinate:
             raise HTTPException(status_code=404, detail="Sessione non trovata. Elabora prima la Fase 1.")
         logger.info("Sessione %s ripristinata da Storage: %s", session_id, ripristinate)
 
     saldo_token = verifica_credito_token(user_id)
-    tracker = TokenUsageTracker(richiesta.modello_llm)
+    if saldo_token is not None:
+        log_message(session_id, f"🪙 Credito token disponibile: {saldo_token:.2f} €.")
 
-    try:
-        supabase.table("migration_sessions").upsert({
-            "id": session_id,
-            "user_id": user_id,
-            "current_step": "final",
-            "linguaggio_target": richiesta.linguaggio_target,
-        }).execute()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore salvataggio sessione Supabase: {e}")
-
-    try:
-        if saldo_token is not None:
-            log_message(session_id, f"🪙 Credito token disponibile: {saldo_token:.2f} €.")
-        log_message(
-            session_id,
-            f"⚙️ Avvio Fase 3 (Implementation): generazione del codice {richiesta.linguaggio_target}...",
-        )
-
-        llm = get_llm(provider=richiesta.provider_llm, model_name=richiesta.modello_llm)
-
-        lista_file_legacy = _carica_file_legacy(cartella_sorgenti)
-        if not lista_file_legacy:
-            lista_file_legacy = [{"nome": "pasted_code.txt", "codice": "Nessun codice trovato."}]
-
-        # AVVIO MOTORE IA: ora ritorna gli esiti (completati/falliti/QA)
-        esiti = run_implementation_phase(
-            llm=llm,
-            linguaggio_target=richiesta.linguaggio_target,
-            output_dir=str(cartella_output),
-            lista_file_legacy_estratti=lista_file_legacy,
-            session_id=session_id,
-            tracker=tracker,
-            quality_gate=richiesta.quality_gate,
-
-        )
-
-        # Sconfezionamento del codice generato in file fisici
-        log_message(session_id, "🗜️ Sconfezionamento del codice generato in file fisici e ZIP finale...")
-        logger.info("Organizzazione del codice Backend in cartelle fisiche...")
-        n_backend = unpack_markdown_to_files(str(cartella_output / FILE_BACKEND_IMPL), str(cartella_output))
-
-        logger.info("Organizzazione del codice Frontend in cartelle fisiche...")
-        n_frontend = unpack_markdown_to_files(str(cartella_output / FILE_FRONTEND_IMPL), str(cartella_output))
-
-        percorso_zip = _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_finale"), str(cartella_output),escludi_cartelle=("sorgenti_originali",))
-        storage.salva_zip_fase(session_id, "finale", percorso_zip)
-
-        blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
-        log_message(
-            session_id,
-            "✨ [SUCCESS]: Fase 3 completata. Progetto pronto per il Testing & Deployment umano.",
-        )
-
-        return {
-            "status": "success",
-            "messaggio": "Fase 3 (Implementation) completata. Progetto pronto per il Testing & Deployment umano.",
-            "session_id": session_id,
-            "file_migrati": esiti["completati"],
-            "file_falliti": esiti["falliti"],
-            "file_saltati_da_checkpoint": esiti["saltati"],
-            "file_sorgente_estratti": {"backend": n_backend, "frontend": n_frontend},
-            "token": blocco_token,
-            "url_download_progetto": f"/api/v1/modernize/download/{session_id}/3",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        _chiudi_conteggio_token(user_id, tracker, session_id)
-        log_message(session_id, f"❌ ERRORE CRITICO IN FASE 3: {e}")
-        logger.exception("Errore in Fase 3, sessione %s", session_id)
-        raise HTTPException(status_code=500, detail=str(e))
-
+    _imposta_stato_esecuzione(session_id, "running", fase="fase3")
+    background_tasks.add_task(
+        _lavoro_fase3, session_id, user_id,
+        richiesta.provider_llm, richiesta.modello_llm,
+        richiesta.linguaggio_target, richiesta.quality_gate,
+    )
+    return {"status": "avviata", "session_id": session_id}
 
 # =====================================================================
 # DOWNLOAD DINAMICO
