@@ -16,7 +16,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from contacts import router as contacts_router
-app.include_router(contacts_router)
 
 from auth import get_current_user, get_current_user_and_validate_license, supabase
 from payments import addebita_consumo_token, verifica_credito_token
@@ -70,6 +69,8 @@ app.include_router(payments_router)
 # Endpoint di trial
 app.include_router(trial_router)
 
+# EndPoint Contatti
+app.include_router(contacts_router)
 # =====================================================================
 # Modelli di input
 # =====================================================================
