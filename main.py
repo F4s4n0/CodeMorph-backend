@@ -8,14 +8,14 @@ import storage
 
 from pathlib import Path
 from typing import Optional, List
-
+from datetime import datetime, timezone
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, File, UploadFile, Depends, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Form, File, UploadFile, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from auth import get_current_user_and_validate_license, supabase
+from auth import get_current_user, get_current_user_and_validate_license, supabase
 from payments import addebita_consumo_token, verifica_credito_token
 from payments import router as payments_router
 from src.code_unpacker import unpack_markdown_to_files
@@ -127,6 +127,23 @@ def _verifica_proprieta_sessione(session_id: str, user_id: str):
     if risposta.data and risposta.data[0]["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Questa sessione appartiene a un altro account.")
 
+def _imposta_stato_esecuzione(session_id, stato, fase=None, errore=None, risultato=None):
+    """
+    Aggiorna lo stato di avanzamento della sessione su Supabase.
+    Best-effort: un errore qui non deve mai far fallire la pipeline.
+    stato: 'running' | 'completata' | 'errore'
+    """
+    dati = {"stato_esecuzione": stato, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if fase is not None:
+        dati["fase_in_corso"] = fase
+    # Sempre valorizzati (anche a None) per ripulire l'esito precedente
+    dati["errore_messaggio"] = errore
+    dati["risultato"] = risultato
+    try:
+        supabase.table("migration_sessions").update(dati).eq("id", session_id).execute()
+    except Exception as e:
+        logger.error("Stato esecuzione non aggiornato per %s: %s", session_id, e)
+
 
 def _estrai_zip_sicuro(zip_path: Path, destinazione: Path):
     """
@@ -233,83 +250,57 @@ def require_admin(user_id: str = Depends(get_current_user_and_validate_license))
 
 
 # =====================================================================
+# ENDPOINT DI STAT SESSIONE
+# =====================================================================
+
+
+@app.get("/api/v1/modernize/stato/{session_id}")
+def stato_esecuzione(session_id: str, user_id: str = Depends(get_current_user)):
+    """
+    Avanzamento della sessione: il frontend lo interroga in polling mentre
+    la fase gira in background.
+    """
+    session_id = _valida_session_id(session_id)
+    _verifica_proprieta_sessione(session_id, user_id)
+    try:
+        r = (supabase.table("migration_sessions")
+             .select("stato_esecuzione,fase_in_corso,errore_messaggio,risultato,status")
+             .eq("id", session_id).execute())
+    except Exception as e:
+        logger.error("Lettura stato esecuzione fallita per %s: %s", session_id, e)
+        raise HTTPException(status_code=503, detail="Servizio non disponibile.")
+    if not r.data:
+        raise HTTPException(status_code=404, detail="Sessione non trovata.")
+    return r.data[0]
+
+# =====================================================================
 # FASE 1: UNDERSTANDING (doppia modalità ZIP / testo)
 # =====================================================================
 
-@app.post("/api/v1/modernize/understand")
-def fase1_understand(
-    provider_llm: str = Form(...),
-    modello_llm: str = Form(...),
-    session_id: str = Form(...),
-    session_name: str = Form("Progetto Senza Nome"),
-    file: Optional[UploadFile] = File(None),
-    codice_legacy: Optional[str] = Form(None),
-    user_id: str = Depends(get_current_user_and_validate_license),
-    quality_gate: bool = Form(False),
-):
-    session_id = _valida_session_id(session_id)
-    _verifica_proprieta_sessione(session_id, user_id)
-
-    # Credito token: blocca subito (402) chi ha esaurito la quota inclusa
-    # nel pass, PRIMA di consumare LLM. Il consumo reale della fase viene
-    # addebitato alla fine da _chiudi_conteggio_token.
-    saldo_token = verifica_credito_token(user_id)
+def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
+                  ha_file, codice_legacy, quality_gate):
+    """
+    Elaborazione della Fase 1 in background: tutto ciò che prima stava
+    dentro il try dell'endpoint. Non solleva mai: registra l'esito su DB.
+    """
     tracker = TokenUsageTracker(modello_llm)
-
-    # Validazione input PRIMA di toccare DB e filesystem: senza sorgenti
-    # la pipeline girerebbe a vuoto producendo documentazione del nulla.
-    if not file and not (codice_legacy and codice_legacy.strip()):
-        raise HTTPException(
-            status_code=400,
-            detail="Fornisci un archivio .zip della Solution oppure il codice legacy come testo.",
-        )
-
-    # 1. Salvataggio sessione su Supabase (upsert: crea o aggiorna)
-    try:
-        supabase.table("migration_sessions").upsert({
-            "id": session_id,
-            "user_id": user_id,
-            "current_step": "input",
-            "provider_llm": provider_llm,
-            "modello_llm": modello_llm,
-            "session_name": session_name,
-        }).execute()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Impossibile salvare la sessione: {e}")
-
-    logger.info("Utente %s al lavoro sulla sessione %s", user_id, session_id)
-
     cartella_output = _cartella_sessione(session_id)
-    cartella_output.mkdir(parents=True, exist_ok=True)
-
-    if saldo_token is not None:
-        log_message(session_id, f"🪙 Credito token disponibile: {saldo_token:.2f} €.")
+    cartella_sorgenti = cartella_output / "sorgenti_originali"
 
     try:
+        _imposta_stato_esecuzione(session_id, "running", fase="fase1")
         llm = get_llm(provider=provider_llm, model_name=modello_llm)
-        codice_da_analizzare = ""
 
-        if file:
-            if not file.filename.lower().endswith(".zip"):
-                raise HTTPException(status_code=400, detail="Devi caricare l'intera Solution in formato .zip")
-
-            cartella_sorgenti = cartella_output / "sorgenti_originali"
-            cartella_sorgenti.mkdir(parents=True, exist_ok=True)
-
-            log_message(session_id, "⚡ Ricezione pacchetto Solution ed estrazione in corso sul server...")
-            zip_path = cartella_output / "solution_upload.zip"  # nome fisso: il filename del client non è affidabile
-            with open(zip_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-
+        if ha_file:
+            log_message(session_id, "🗂️ Estrazione dell'archivio e analisi delle dipendenze...")
+            zip_path = cartella_output / "solution_upload.zip"
             try:
                 _estrai_zip_sicuro(zip_path, cartella_sorgenti)
             except zipfile.BadZipFile:
-                raise HTTPException(status_code=400, detail="Il file non è un archivio ZIP valido o è corrotto.")
-
+                raise ValueError("Il file non è un archivio ZIP valido o è corrotto.")
             codice_da_analizzare = process_directory_to_graph(
                 cartella_sorgenti, llm, session_id, tracker=tracker
             )
-
         else:
             log_message(session_id, "📝 Analisi dello script di testo singolo avviata...")
             codice_da_analizzare = codice_legacy
@@ -330,24 +321,73 @@ def fase1_understand(
 
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
         log_message(session_id, "✨ [SUCCESS]: Fase 1 completata. Report pronti per l'ispezione umana.")
-        log_message(session_id, "🔄 Reindirizzamento al Checkpoint 1...")
 
-        return {
-            "status": "success",
-            "session_id": session_id,
-            "token": blocco_token,
-            "url_download": f"/api/v1/modernize/download/{session_id}/1",
-        }
-    except HTTPException:
-        raise  # Non mascherare i 400/403 con un 500 generico
+        _imposta_stato_esecuzione(
+            session_id, "completata", fase="fase1",
+            risultato={"token": blocco_token,
+                       "url_download": f"/api/v1/modernize/download/{session_id}/1"},
+        )
     except Exception as e:
         # I token già consumati prima del crash vanno comunque contabilizzati
         _chiudi_conteggio_token(user_id, tracker, session_id)
-        log_message(session_id, f"❌ ERRORE CRITICO DI SISTEMA: {e}")
         logger.exception("Errore in Fase 1, sessione %s", session_id)
-        raise HTTPException(status_code=500, detail=f"Errore interno IA: {e}")
+        log_message(session_id, f"❌ ERRORE CRITICO DI SISTEMA: {e}")
+        _imposta_stato_esecuzione(session_id, "errore", fase="fase1", errore=str(e))
 
+@app.post("/api/v1/modernize/understand")
+@app.post("/api/v1/modernize/understand", status_code=202)
+def fase1_understand(
+    background_tasks: BackgroundTasks,          # ← NUOVO parametro
+    provider_llm: str = Form(...),
+    modello_llm: str = Form(...),
+    session_id: str = Form(...),
+    session_name: str = Form("Progetto Senza Nome"),
+    file: Optional[UploadFile] = File(None),
+    codice_legacy: Optional[str] = Form(None),
+    user_id: str = Depends(get_current_user_and_validate_license),
+    quality_gate: bool = Form(False),
+):
+    session_id = _valida_session_id(session_id)
+    _verifica_proprieta_sessione(session_id, user_id)
 
+    # Credito token: blocca subito (402) chi ha esaurito la quota
+    verifica_credito_token(user_id)
+
+    if not file and not codice_legacy:
+        raise HTTPException(status_code=400, detail="Fornisci un file ZIP oppure del codice testuale.")
+
+    cartella_output = _cartella_sessione(session_id)
+    cartella_output.mkdir(parents=True, exist_ok=True)
+    (cartella_output / "sorgenti_originali").mkdir(exist_ok=True)
+
+    # IMPORTANTE: il file caricato va salvato ORA. Dopo la risposta HTTP
+    # lo stream di UploadFile viene chiuso e il background non lo vedrebbe più.
+    ha_file = file is not None
+    if ha_file:
+        zip_path = cartella_output / "solution_upload.zip"
+        with open(zip_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+    # Registrazione della sessione (come prima)
+    try:
+        supabase.table("migration_sessions").upsert({
+            "id": session_id,
+            "user_id": user_id,
+            "session_name": session_name,
+            "status": "INPUT",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as e:
+        logger.error("Registrazione sessione fallita: %s", e)
+
+    _imposta_stato_esecuzione(session_id, "running", fase="fase1")
+    log_message(session_id, "⚡ Ricezione completata: elaborazione avviata sul server.")
+
+    background_tasks.add_task(
+        _lavoro_fase1, session_id, user_id, provider_llm, modello_llm,
+        ha_file, codice_legacy, quality_gate,
+    )
+    return {"status": "avviata", "session_id": session_id}
 # =====================================================================
 # LOG LIVE
 # =====================================================================
