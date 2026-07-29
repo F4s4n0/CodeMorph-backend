@@ -234,7 +234,7 @@ def _chiudi_conteggio_token(user_id: str, tracker, session_id: str):
     }
 
 
-def require_admin(user_id: str = Depends(get_current_user_and_validate_license)):
+def require_admin(user_id: str = Depends(get_current_user)):
     """Verifica che l'utente autenticato abbia ruolo admin nella tabella profiles."""
     try:
         utente = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
@@ -766,7 +766,7 @@ def admin_ottieni_tutti_gli_utenti(user_id: str = Depends(require_admin)):
 
 
 @app.get("/api/v1/admin/sessions")
-def admin_ottieni_tutte_le_sessioni(user_id: str = Depends(get_current_user_and_validate_license)):
+def admin_ottieni_tutte_le_sessioni(user_id: str = Depends(get_current_user)):
     try:
         utente = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
         is_admin = utente.data and utente.data.get("role") == "admin"
@@ -785,7 +785,7 @@ def admin_ottieni_tutte_le_sessioni(user_id: str = Depends(get_current_user_and_
 
 
 @app.delete("/api/v1/admin/sessions/{session_id}")
-def admin_cancella_sessione(session_id: str, user_id: str = Depends(get_current_user_and_validate_license)):
+def admin_cancella_sessione(session_id: str, user_id: str = Depends(get_current_user)):
     session_id = _valida_session_id(session_id)
 
     # 1. Controllo permessi
