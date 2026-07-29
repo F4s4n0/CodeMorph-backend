@@ -15,6 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from contacts import router as contacts_router
+app.include_router(contacts_router)
+
 from auth import get_current_user, get_current_user_and_validate_license, supabase
 from payments import addebita_consumo_token, verifica_credito_token
 from payments import router as payments_router
