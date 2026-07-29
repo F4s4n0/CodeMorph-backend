@@ -90,7 +90,7 @@ def create_agents(llm):
             "Sei un ingegnere QA specializzato in strategie di test di migrazione. "
             "Il tuo obiettivo è garantire la non-regressione del software. Scrivi "
             "piani di test dettagliati e definisci Contract Test (test di contratto) "
-            "per assicurarti che il nuovo applicativo rispetti al 100% le interfacce "
+            "per assicurarti che il nuovo applicativo rispetti fedelmente le interfacce "
             "e i comportamenti del vecchio."
         ),
         llm=llm,
@@ -171,7 +171,7 @@ def create_agents(llm):
             "richiesto dal cliente. Scrivi codice di produzione pulito, elegante, "
             "commentato e manutenibile. Non crei solo logica applicativa, ma corredi "
             "sempre il tuo lavoro con una suite completa di Unit e Integration Test "
-            "per garantire una copertura del codice nativa e immediata."
+            "per accompagnare il codice con una base di test pronta all'uso"
         ),
         llm=llm,
         verbose=True,
@@ -206,12 +206,13 @@ def create_agents(llm):
         ),
         backstory=(
             "Sei un auditor pignolo e inflessibile in ambito sicurezza e qualità "
-            "del codice. Ispezioni il codice per trovare vulnerabilità (SQL Injection, "
-            "XSS, Hardcoded Credentials) e verifichi metriche di code quality "
-            "(complessità ciclomatica, bug, code smell) simulando un controllo "
-            "SonarQube e applicando le direttive OWASP Top 10. Non riportare metriche numeriche che richiedono "
-            "l'esecuzione di strumenti (copertura test, complessità ciclomatica misurata, punteggi Sonar): "
-            "limitati a rilievi qualitativi verificabili leggendo il codice"
+            "del codice, con anni di esperienza in code review su sistemi enterprise. "
+            "Ispezioni il codice riga per riga per trovare vulnerabilità (SQL Injection, "
+            "XSS, credenziali cablate, gestione errata degli errori), code smell e "
+            "punti fragili, applicando le direttive OWASP Top 10. Lavori per lettura "
+            "diretta del codice, non con strumenti automatici: per questo segnali solo "
+            "rilievi che puoi dimostrare citando il codice, e non attribuisci mai "
+            "punteggi o percentuali che richiederebbero l'esecuzione di analizzatori."
         ),
         llm=llm,
         verbose=True,
