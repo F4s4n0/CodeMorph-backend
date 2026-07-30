@@ -28,8 +28,6 @@ ESTENSIONI_VALIDE = {
 
 MAX_FILE_SIZE = 250 * 1024
 
-if DELAY_TRA_FILE_SEC:
-    time.sleep(DELAY_TRA_FILE_SEC)
 
 # =====================================================================
 # Estrazione nativa FoxPro
@@ -242,6 +240,8 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None)
 
             try:
                 log_message(session_id, f"Analisi dipendenze IA per: {file} ...")
+                if DELAY_TRA_FILE_SEC:
+                    time.sleep(DELAY_TRA_FILE_SEC)
                 dati_json = extract_dependencies_from_file(file, content, llm, tracker=tracker)
                 nodo_principale = dati_json.get("file", file)
                 G.add_node(nodo_principale)
