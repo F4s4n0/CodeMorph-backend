@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from crewai import Task
 
@@ -28,6 +30,19 @@ def _escape_braces(text: str) -> str:
     return str(text).replace("{", "{{").replace("}", "}}")
 
 
+def _nota_data():
+    """
+    Gli LLM non conoscono la data corrente e la inventano (di solito nel
+    passato, vicino al proprio addestramento). Gliela forniamo esplicitamente.
+    """
+    oggi = datetime.now(ZoneInfo("Europe/Rome")).strftime("%d/%m/%Y")
+    return (
+        f"\n\nDATA ODIERNA: {oggi}. "
+        "Se il documento richiede una data (ADR, revisioni, cronologie), usa "
+        "ESCLUSIVAMENTE questa. Non inventare date, anni o periodi: se "
+        "un'informazione temporale non è deducibile dal codice sorgente "
+        "analizzato, ometti il riferimento invece di stimarlo."
+    )
 # =====================================================================
 # FASE 1 - UNDERSTANDING
 # =====================================================================
@@ -47,7 +62,7 @@ def get_understanding_tasks(agents, output_dir):
             "del sistema sorgente. Mappa le strutture dati, i moduli software, le "
             "dipendenze esterne, le costanti e l'inventario complessivo "
             "dell'applicativo legacy analizzato."
-        ),
+        )+ _nota_data(),,
         expected_output=(
             "Un documento di 'Inventory' strutturato in formato Markdown che elenca "
             "in modo esaustivo tutti gli asset identificati nel codice legacy, la "
@@ -65,7 +80,7 @@ def get_understanding_tasks(agents, output_dir):
             "configurazione, schemi o tabelle del database e script di orchestrazione "
             "o processi batch."
             + MERMAID_RULES
-        ),
+        )+ _nota_data(),,
         expected_output=(
             "Un report di 'Dependency Map' in formato Markdown che DEVE "
             "obbligatoriamente contenere: 1) un diagramma Mermaid (graph TD) "
@@ -90,7 +105,7 @@ def get_understanding_tasks(agents, output_dir):
         expected_output=(
             "Un documento in Markdown contenente la Technical Documentation "
             "dettagliata del software originale."
-        ),
+        )+ _nota_data(),,
         agent=agents["tech_business_documenter"],
         context=[assessment_task, map_dependency_task],
         output_file=f"{output_dir}/{FILE_TECH_DOC}",
@@ -107,7 +122,7 @@ def get_understanding_tasks(agents, output_dir):
             "'Come [ruolo], voglio [azione] affinché [valore]'.\n"
             "3. Acceptance Criteria per ogni User Story (es. GIVEN, WHEN, THEN)."
             + MERMAID_RULES
-        ),
+        )+ _nota_data(),,
         expected_output=(
             "Un documento Markdown strutturato come un Product Backlog Agile, "
             "pronto per Jira o Azure DevOps."
@@ -129,7 +144,7 @@ def get_understanding_tasks(agents, output_dir):
             "Un documento 'Test Book' strutturato in Markdown contenente le schede "
             "dei test funzionali e i vincoli dei Contract Test necessari a validare "
             "il successo della futura modernizzazione."
-        ),
+        )+ _nota_data(),,
         agent=agents["qa_test_planner"],
         context=[documentation_task, functional_analysis_task],
         output_file=f"{output_dir}/{FILE_TEST_BOOK}",
@@ -179,7 +194,7 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "modelli database e lo standard delle API nel nuovo sistema target."
             + MERMAID_RULES
             + blocco_contesto
-        ),
+        )+ _nota_data(),,
         expected_output=(
             "Un documento in formato Markdown che include il Migration Plan completo "
             "e l'elenco formale degli ADR (Architectural Decision Records) per "
@@ -205,7 +220,7 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "dove serve), senza testo Markdown attorno, perché verrà salvato come "
             "file .sql eseguibile."
             + blocco_contesto
-        ),
+        )+ _nota_data(),,
         expected_output=(
             "Uno script SQL formattato correttamente contenente le istruzioni DDL "
             "per la creazione del nuovo database relazionale."
@@ -368,7 +383,7 @@ def get_quality_check_task(
             "Sono dati che non puoi misurare leggendo il codice: riportarli sarebbe "
             "un'informazione falsa. Limitati a rilievi qualitativi verificabili, "
             "citando file, funzione o riga."
-        ),
+        )+ _nota_data(),,
         expected_output=(
             "Un report di 'Quality Check' in Markdown con: sintesi della revisione, "
             "tabella dei rilievi (tipo | descrizione | posizione nel codice | gravità "
@@ -409,7 +424,7 @@ def get_validation_task(agent, output_dir, nome_fase, output_filename):
             "lavorare senza dover indovinare?\n\n"
             "Scrivi in ITALIANO. Sii concreto: cita il documento e la sezione per "
             "ogni rilievo. Non riscrivere i documenti, non aggiungere analisi tue."
-        ),
+        )+ _nota_data(),,
         expected_output=(
             "Un report di validazione in Markdown che inizia OBBLIGATORIAMENTE con "
             "una riga nel formato esatto:\n"
