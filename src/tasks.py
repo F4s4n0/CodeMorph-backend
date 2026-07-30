@@ -66,7 +66,6 @@ def get_understanding_tasks(agents, output_dir):
              + CONVENZIONI_FASE1
         )+ _nota_data(),
         expected_output=(
-           expected_output=(
             "Un documento di 'Inventory' strutturato in formato Markdown che elenca "
             "in modo esaustivo tutti gli asset identificati nel codice legacy, la "
             "tipologia dei file, le dimensioni e l'analisi statica iniziale. "
@@ -97,12 +96,10 @@ def get_understanding_tasks(agents, output_dir):
             "3) l'evidenza dei punti critici di accoppiamento. "
             "Un report senza il diagramma Mermaid è considerato incompleto."
             "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO: non annunciare nell'indice sezioni che non "
-            "svilupperai, e concludi il testo prima di esaurire lo spazio "
-            "disponibile. Meglio 6 sezioni complete che 13 troncate." Non annunciare nell'indice sezioni che non "
-            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
-            "troncate. Non inserire rinvii a sezioni che non esistono nel "
-            "documento. Concludi sempre il testo prima di esaurire lo spazio."
+            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
+            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
+            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
+            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
         ),
         agent=agents["dependency_mapper"],
         context=[assessment_task],
@@ -121,12 +118,10 @@ def get_understanding_tasks(agents, output_dir):
             "Un documento in Markdown contenente la Technical Documentation "
             "dettagliata del software originale."
             "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO: non annunciare nell'indice sezioni che non "
-            "svilupperai, e concludi il testo prima di esaurire lo spazio "
-            "disponibile. Meglio 6 sezioni complete che 13 troncate." Non annunciare nell'indice sezioni che non "
-            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
-            "troncate. Non inserire rinvii a sezioni che non esistono nel "
-            "documento. Concludi sempre il testo prima di esaurire lo spazio."
+            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
+            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
+            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
+            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
         )+ _nota_data(),
         agent=agents["tech_business_documenter"],
         context=[assessment_task, map_dependency_task],
@@ -152,12 +147,10 @@ def get_understanding_tasks(agents, output_dir):
             "'Documentazione Funzionale': il Product Backlog è la sua forma, "
             "non il suo nomeUn documento."
             "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO: non annunciare nell'indice sezioni che non "
-            "svilupperai, e concludi il testo prima di esaurire lo spazio "
-            "disponibile. Meglio 6 sezioni complete che 13 troncate." Non annunciare nell'indice sezioni che non "
-            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
-            "troncate. Non inserire rinvii a sezioni che non esistono nel "
-            "documento. Concludi sempre il testo prima di esaurire lo spazio."
+            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
+            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
+            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
+            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
         ),
         agent=agents["functional_analyst"],
         context=[assessment_task, map_dependency_task],
@@ -178,12 +171,10 @@ def get_understanding_tasks(agents, output_dir):
             "dei test funzionali e i vincoli dei Contract Test necessari a validare "
             "il successo della futura modernizzazione."
             "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO: non annunciare nell'indice sezioni che non "
-            "svilupperai, e concludi il testo prima di esaurire lo spazio "
-            "disponibile. Meglio 6 sezioni complete che 13 troncate." Non annunciare nell'indice sezioni che non "
-            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
-            "troncate. Non inserire rinvii a sezioni che non esistono nel "
-            "documento. Concludi sempre il testo prima di esaurire lo spazio."
+            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
+            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
+            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
+            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
         )+ _nota_data(),
         agent=agents["qa_test_planner"],
         context=[documentation_task, functional_analysis_task],
@@ -242,10 +233,8 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
             "deve essere COMPLETO: non annunciare nell'indice sezioni che non "
             "svilupperai, e concludi il testo prima di esaurire lo spazio "
-            "disponibile. Meglio 6 sezioni complete che 13 troncate." Non annunciare nell'indice sezioni che non "
-            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
-            "troncate. Non inserire rinvii a sezioni che non esistono nel "
-            "documento. Concludi sempre il testo prima di esaurire lo spazio."
+            "disponibile. Meglio 6 sezioni complete che 13 dichiarate e troncate. "
+            "Non inserire rinvii a sezioni che non esistono nel documento."
         ),
         agent=agents["cloud_solutions_architect"],
         output_file=f"{output_dir}/{FILE_MIGRATION_PLAN}",
@@ -274,10 +263,8 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
             "deve essere COMPLETO: non annunciare nell'indice sezioni che non "
             "svilupperai, e concludi il testo prima di esaurire lo spazio "
-            "disponibile. Meglio 6 sezioni complete che 13 troncate." Non annunciare nell'indice sezioni che non "
-            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
-            "troncate. Non inserire rinvii a sezioni che non esistono nel "
-            "documento. Concludi sempre il testo prima di esaurire lo spazio."
+            "disponibile. Meglio 6 sezioni complete che 13 dichiarate e troncate. "
+            "Non inserire rinvii a sezioni che non esistono nel documento."
         ),
         agent=agents["database_administrator"],
         context=[migration_plan_task],
