@@ -51,22 +51,18 @@ FILE_IMPL_CHECKPOINT  = "_implementation_checkpoint.json"
 # Nascono da un rilievo del Quality Gate: ogni agente si numerava da sé
 # ("Fase 2 — Dependency Discovery", due documenti entrambi "Fase 3") e i
 # rinvii incrociati puntavano a documenti con nomi diversi da quelli reali.
-CONVENZIONI_FASE1 = (
-    "\n\nCONVENZIONI OBBLIGATORIE DI INTESTAZIONE:\n"
-    "1. Questo documento appartiene alla FASE 1 · UNDERSTANDING. Nell'header "
-    "usa esattamente questa dicitura: non inventare numerazioni di fase "
-    "diverse (mai 'Fase 2', 'Fase 3', 'Discovery' come numero di fase).\n"
-    "2. Identifica il documento con il proprio nome file, senza rinominarlo.\n"
-    "3. Per i rinvii ad altri deliverable della stessa fase usa ESATTAMENTE "
-    "questi nomi:\n"
-    "   - 1_Assessment_Inventory.md (inventario degli asset)\n"
-    "   - 2_Map_Dependency.md (grafo delle dipendenze)\n"
-    "   - 3a_Technical_Documentation.md (documentazione tecnica)\n"
-    "   - 3b_Functional_Documentation.md (documentazione funzionale, "
-    "strutturata come Product Backlog Agile con Epics e User Stories)\n"
-    "   - 4_Test_Book_Generation.md (piano di test)\n"
-    "4. Non citare sezioni o documenti che non esistono.\n"
-)
+CONVENZIONI_FASE1 = """
+CONVENZIONI OBBLIGATORIE DI INTESTAZIONE:
+1. Questo documento appartiene alla FASE 1 · UNDERSTANDING. Nell'header usa esattamente questa dicitura: non inventare numerazioni di fase diverse (mai 'Fase 2', 'Fase 3', 'Discovery' come numero di fase).
+2. Identifica il documento con il proprio nome file, senza rinominarlo.
+3. Per i rinvii ad altri deliverable della stessa fase usa ESATTAMENTE questi nomi:
+   - 1_Assessment_Inventory.md (inventario degli asset)
+   - 2_Map_Dependency.md (grafo delle dipendenze)
+   - 3a_Technical_Documentation.md (documentazione tecnica)
+   - 3b_Functional_Documentation.md (documentazione funzionale, strutturata come Product Backlog Agile con Epics e User Stories)
+   - 4_Test_Book_Generation.md (piano di test)
+4. Non citare sezioni o documenti che non esistono.
+"""
 
 # --- Regole di formattazione condivise (iniettate nei task, NON nei backstory) ---
 # Nota: è una regola di formato output, non un tratto di personalità dell'agente.
