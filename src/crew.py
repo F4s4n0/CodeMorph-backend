@@ -2,7 +2,7 @@ import json
 import logging
 import os
 
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from crewai import Crew, Process
 from src.agents import create_agents
@@ -23,6 +23,7 @@ from src.config import (
     FILE_VALIDATION_FASE2,
     FILE_VALIDATION_FASE3,
     VALIDAZIONE_MAX_CHARS,
+    DELAY_TRA_FILE_SEC
 )
 from src.live_log import crea_logger_attivita, log_message
 from src.tasks import (
@@ -381,6 +382,8 @@ def run_implementation_phase(
                 session_id,
                 f"✅ ({indice}/{totale}) {nome_file} migrato e salvato nei file di implementazione.",
             )
+            if DELAY_TRA_FILE_SEC:
+                time.sleep(DELAY_TRA_FILE_SEC)
 
         except Exception:
             # Un fallimento su un file (rate limit, timeout, errore LLM) non deve
@@ -391,6 +394,7 @@ def run_implementation_phase(
                 f"❌ Migrazione di {nome_file} fallita — proseguo con il file successivo.",
             )
             esiti["falliti"].append(nome_file)
+
 
     # 4. QUALITY CHECK finale, a blocchi per non saturare la context window
     codice_backend = _read_if_exists(percorso_backend, "")

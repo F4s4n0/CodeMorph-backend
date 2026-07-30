@@ -38,6 +38,10 @@ FILE_VALIDATION_FASE1 = "8_Validation_Report_Fase1.md"
 FILE_VALIDATION_FASE2 = "9_Validation_Report_Fase2.md"
 FILE_VALIDATION_FASE3 = "10_Validation_Report_Fase3.md"
 VALIDAZIONE_MAX_CHARS = 40000   # tetto al contesto inviato al validatore
+# Pausa tra l'analisi di un file e il successivo. Serve a non saturare i
+# limiti per minuto del provider su progetti con molti file.
+# 0 = nessuna pausa (progetti piccoli), 1-2s = prudente su progetti grandi.
+DELAY_TRA_FILE_SEC = float(os.getenv("DELAY_TRA_FILE_SEC", "1"))
 
 # File di checkpoint per la fase iterativa (permette il resume dopo un crash)
 FILE_IMPL_CHECKPOINT  = "_implementation_checkpoint.json"

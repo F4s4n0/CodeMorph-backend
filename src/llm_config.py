@@ -43,6 +43,7 @@ def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERAT
             base_url=os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL),
             temperature=temperature,
             max_tokens=max_tokens,
+            
         )
 
     if provider not in _PROVIDERS:
@@ -59,6 +60,10 @@ def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERAT
     parametri = {
         "model": f"{prefisso}{model_name}",
         "api_key": api_key,
+          # LiteLLM ritenta automaticamente gli errori transitori (529 overloaded,
+        # 429 rate limit, timeout) con attesa progressiva: copre TUTTE le chiamate
+        # della piattaforma, non solo un punto specifico.
+        "num_retries": int(os.getenv("LLM_NUM_RETRIES", "4")),
     }
     # I modelli più recenti rifiutano temperature: va omesso, non azzerato
     if _accetta_temperature(model_name):

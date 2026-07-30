@@ -1,5 +1,6 @@
 import json
 import os
+from time import time
 
 import networkx as nx
 from crewai import Agent, Task, Crew
@@ -8,6 +9,7 @@ from dbfread import DBF  # Libreria nativa per FoxPro
 # log_message vive ora in src/live_log.py (stessa cartella di scrittura e
 # lettura dei log live). L'import resta qui anche come re-export per il
 # codice esistente che lo importava da questo modulo.
+from src.config import DELAY_TRA_FILE_SEC
 from src.live_log import log_message
 
 # --- LISTE DI FILTRAGGIO ---
@@ -26,6 +28,8 @@ ESTENSIONI_VALIDE = {
 
 MAX_FILE_SIZE = 250 * 1024
 
+if DELAY_TRA_FILE_SEC:
+    time.sleep(DELAY_TRA_FILE_SEC)
 
 # =====================================================================
 # Estrazione nativa FoxPro
