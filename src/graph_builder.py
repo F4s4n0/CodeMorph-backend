@@ -10,6 +10,7 @@ from dbfread import DBF  # Libreria nativa per FoxPro
 # log_message vive ora in src/live_log.py (stessa cartella di scrittura e
 # lettura dei log live). L'import resta qui anche come re-export per il
 # codice esistente che lo importava da questo modulo.
+import interruzione
 from src.config import DELAY_TRA_FILE_SEC
 from src.live_log import log_message
 
@@ -241,6 +242,7 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None)
 
             try:
                 log_message(session_id, f"Analisi dipendenze IA per: {file} ...")
+                interruzione.verifica_stop(session_id)
                 if DELAY_TRA_FILE_SEC:
                     time.sleep(DELAY_TRA_FILE_SEC)
                 dati_json = extract_dependencies_from_file(file, content, llm, tracker=tracker)
@@ -249,6 +251,8 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None)
 
                 for dipendenza in dati_json.get("depends_on", []):
                     G.add_edge(nodo_principale, dipendenza)
+            except interruzione.FaseInterrotta:
+                raise
             except Exception as e:
                 log_message(session_id, f"Errore IA su {file}: {e}")
 

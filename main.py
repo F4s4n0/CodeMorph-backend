@@ -4,6 +4,7 @@ import re
 import shutil
 import zipfile
 import storage
+import interruzione
 
 
 from pathlib import Path
@@ -254,7 +255,7 @@ def require_admin(user_id: str = Depends(get_current_user)):
 
 
 # =====================================================================
-# ENDPOINT DI STAT SESSIONE
+# ENDPOINT DI STATO SESSIONE
 # =====================================================================
 
 
@@ -276,6 +277,24 @@ def stato_esecuzione(session_id: str, user_id: str = Depends(get_current_user)):
     if not r.data:
         raise HTTPException(status_code=404, detail="Sessione non trovata.")
     return r.data[0]
+
+# =====================================================================
+# ENDPOINT DI STOP SESSIONE
+# =====================================================================
+
+
+@app.post("/api/v1/modernize/stop/{session_id}")
+def interrompi_fase(session_id: str, user_id: str = Depends(get_current_user)):
+    """
+    Chiede l'interruzione della fase in corso. Lo stop è cooperativo:
+    il lavoro si ferma al primo punto di controllo utile.
+    """
+    session_id = _valida_session_id(session_id)
+    _verifica_proprieta_sessione(session_id, user_id)
+
+    interruzione.richiedi_stop(session_id)
+    log_message(session_id, "🛑 Interruzione richiesta: la fase si fermerà tra pochi istanti...")
+    return {"status": "stop_richiesto"}
 
 # =====================================================================
 # FASE 1: UNDERSTANDING (doppia modalità ZIP / testo)
@@ -331,12 +350,21 @@ def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
             risultato={"token": blocco_token,
                        "url_download": f"/api/v1/modernize/download/{session_id}/1"},
         )
+    except interruzione.FaseInterrotta:
+        # I token già consumati vanno addebitati: sono stati spesi davvero
+        _chiudi_conteggio_token(user_id, tracker, session_id)
+        logger.info("Fase 1 interrotta dall'utente, sessione %s", session_id)
+        log_message(session_id, "🛑 Elaborazione interrotta. I token consumati fino a questo punto sono stati addebitati.")
+        _imposta_stato_esecuzione(session_id, "interrotta", fase="fase1",
+                                  errore="Interrotta su richiesta dell'utente.") 
     except Exception as e:
         # I token già consumati prima del crash vanno comunque contabilizzati
         _chiudi_conteggio_token(user_id, tracker, session_id)
         logger.exception("Errore in Fase 1, sessione %s", session_id)
         log_message(session_id, f"❌ ERRORE CRITICO DI SISTEMA: {e}")
         _imposta_stato_esecuzione(session_id, "errore", fase="fase1", errore=str(e))
+    finally:
+        interruzione.pulisci(session_id)
 
 @app.post("/api/v1/modernize/understand")
 @app.post("/api/v1/modernize/understand", status_code=202)
@@ -505,11 +533,20 @@ def _lavoro_fase2(session_id, user_id, provider_llm, modello_llm,
             risultato={"token": blocco_token,
                        "url_download": f"/api/v1/modernize/download/{session_id}/2"},
         )
+    except interruzione.FaseInterrotta:
+        # I token già consumati vanno addebitati: sono stati spesi davvero
+        _chiudi_conteggio_token(user_id, tracker, session_id)
+        logger.info("Fase 1 interrotta dall'utente, sessione %s", session_id)
+        log_message(session_id, "🛑 Elaborazione interrotta. I token consumati fino a questo punto sono stati addebitati.")
+        _imposta_stato_esecuzione(session_id, "interrotta", fase="fase1",
+                                  errore="Interrotta su richiesta dell'utente.")
     except Exception as e:
         _chiudi_conteggio_token(user_id, tracker, session_id)
         logger.exception("Errore in Fase 2, sessione %s", session_id)
         log_message(session_id, f"❌ ERRORE CRITICO IN FASE 2: {e}")
         _imposta_stato_esecuzione(session_id, "errore", fase="fase2", errore=str(e))
+    finally:
+        interruzione.pulisci(session_id)
 
 
 @app.post("/api/v1/modernize/design", status_code=202)
@@ -642,11 +679,20 @@ def _lavoro_fase3(session_id, user_id, provider_llm, modello_llm,
                 "url_download": f"/api/v1/modernize/download/{session_id}/3",
             },
         )
+    except interruzione.FaseInterrotta:
+        # I token già consumati vanno addebitati: sono stati spesi davvero
+        _chiudi_conteggio_token(user_id, tracker, session_id)
+        logger.info("Fase 1 interrotta dall'utente, sessione %s", session_id)
+        log_message(session_id, "🛑 Elaborazione interrotta. I token consumati fino a questo punto sono stati addebitati.")
+        _imposta_stato_esecuzione(session_id, "interrotta", fase="fase1",
+                                  errore="Interrotta su richiesta dell'utente.")
     except Exception as e:
         _chiudi_conteggio_token(user_id, tracker, session_id)
         logger.exception("Errore in Fase 3, sessione %s", session_id)
         log_message(session_id, f"❌ ERRORE CRITICO IN FASE 3: {e}")
         _imposta_stato_esecuzione(session_id, "errore", fase="fase3", errore=str(e))
+    finally:
+        interruzione.pulisci(session_id)
 
 
 @app.post("/api/v1/modernize/implement", status_code=202)

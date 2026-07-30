@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import interruzione
 
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -179,13 +180,18 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
         agents["qa_test_planner"],
     ]
 
+    def step_con_stop(step):
+            interruzione.verifica_stop(session_id)   # solleva se richiesto
+
     crew = Crew(
         agents=fase1_agents,
         tasks=tasks,
         process=Process.sequential,
         verbose=True,
         memory=False,  # Disattivato per evitare errori di fuso orario/database locale
+        step_callback=step_con_stop,
         task_callback=task_callback,  # Log live sincronizzato con l'attività reale
+
     )
 
     annuncia_avvio()
@@ -230,6 +236,9 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
         session_id, tasks, etichetta="Fase 2 · Design"
     )
 
+    def step_con_stop(step):
+            interruzione.verifica_stop(session_id)   # solleva se richiesto
+
     crew = Crew(
         agents=[
             agents["cloud_solutions_architect"],
@@ -239,6 +248,7 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
         process=Process.sequential,
         verbose=True,
         memory=False,
+        step_callback=step_con_stop,
         task_callback=task_callback,  # Log live sincronizzato con l'attività reale
     )
 
@@ -321,6 +331,7 @@ def run_implementation_phase(
 
     # 3. IL CICLO ITERATIVO: un file legacy alla volta
     for indice, file_info in enumerate(lista_file_legacy_estratti, start=1):
+        interruzione.verifica_stop(session_id)
         nome_file = file_info["nome"]
 
         if nome_file in processati:
@@ -345,12 +356,16 @@ def run_implementation_phase(
             impl_tasks.as_list(),
             etichetta=f"file {indice}/{totale}: {nome_file}",
         )
+        def step_con_stop(step):
+            interruzione.verifica_stop(session_id)   # solleva se richiesto
+
         dev_crew = Crew(
             agents=[agents["senior_migration_developer"], agents["frontend_developer"]],
             tasks=impl_tasks.as_list(),
             process=Process.sequential,
             verbose=False,  # Silenzioso per non inondare la console
             memory=False,
+            step_callback=step_con_stop,
             task_callback=task_callback,  # Il log live segue il lavoro reale sul file
         )
 
@@ -430,12 +445,16 @@ def run_implementation_phase(
         annuncia_qa, callback_qa = crea_logger_attivita(
             session_id, qa_tasks, etichetta=f"Quality Check {etichetta}".strip()
         )
+        def step_con_stop(step):
+            interruzione.verifica_stop(session_id)   # solleva se richiesto
+
         qa_crew = Crew(
             agents=[agents["security_quality_reviewer"]],
             tasks=qa_tasks,
             process=Process.sequential,
             verbose=True,
             memory=False,
+            step_callback=step_con_stop,
             task_callback=callback_qa,
         )
 
@@ -499,12 +518,16 @@ def _valida_fase(llm, output_dir, nome_fase, file_da_validare, nome_report,
     annuncia, callback = crea_logger_attivita(
         session_id, tasks, etichetta=f"Quality Gate · {nome_fase}"
     )
+    def step_con_stop(step):
+            interruzione.verifica_stop(session_id)   # solleva se richiesto
+
     crew = Crew(
         agents=[agents["quality_gate_auditor"]],
         tasks=tasks,
         process=Process.sequential,
         verbose=False,
         memory=False,
+        step_callback=step_con_stop,
         task_callback=callback,
     )
 
