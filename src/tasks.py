@@ -424,7 +424,7 @@ def get_validation_task(agent, output_dir, nome_fase, output_filename):
             "lavorare senza dover indovinare?\n\n"
             "Scrivi in ITALIANO. Sii concreto: cita il documento e la sezione per "
             "ogni rilievo. Non riscrivere i documenti, non aggiungere analisi tue."
-        )+ _nota_data(),,
+        )+ _nota_data(),
         expected_output=(
             "Un report di validazione in Markdown che inizia OBBLIGATORIAMENTE con "
             "una riga nel formato esatto:\n"
