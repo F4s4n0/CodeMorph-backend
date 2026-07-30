@@ -18,7 +18,9 @@ DEFAULT_OLLAMA_URL = "http://localhost:11434"
 # Modelli che NON accettano più il parametro temperature (deprecato lato API).
 # Confronto per sottostringa: copre anche le varianti con data.
 MODELLI_SENZA_TEMPERATURE = ("opus-5", "sonnet-5", "fable-5", "mythos-5")
-
+# Output massimo per risposta. I documenti di fase sono lunghi: con il default
+# dei provider vengono troncati a metà 
+DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "16000"))
 
 def _accetta_temperature(model_name):
     nome = (model_name or "").lower()
@@ -69,6 +71,6 @@ def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERAT
     if _accetta_temperature(model_name):
         parametri["temperature"] = temperature
     if max_tokens:
-        parametri["max_tokens"] = max_tokens
+        parametri["max_tokens"] = max_tokens or DEFAULT_MAX_TOKENS
 
     return LLM(**parametri)

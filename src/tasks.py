@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from crewai import Task
 
 from src.config import (
+    CONVENZIONI_FASE1,
     FILE_ASSESSMENT,
     FILE_DEPENDENCY_MAP,
     FILE_TECH_DOC,
@@ -62,11 +63,17 @@ def get_understanding_tasks(agents, output_dir):
             "del sistema sorgente. Mappa le strutture dati, i moduli software, le "
             "dipendenze esterne, le costanti e l'inventario complessivo "
             "dell'applicativo legacy analizzato."
+             + CONVENZIONI_FASE1,
         )+ _nota_data(),
         expected_output=(
             "Un documento di 'Inventory' strutturato in formato Markdown che elenca "
             "in modo esaustivo tutti gli asset identificati nel codice legacy, la "
-            "tipologia dei file, le dimensioni e l'analisi statica iniziale."
+            "tipologia dei file, le dimensioni e l'analisi statica iniziale. "
+            "VINCOLO DI COMPLETEZZA: il documento deve essere COMPLETO e "
+            "autoconclusivo. Non annunciare nell'indice sezioni che non "
+            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
+            "troncate. Non inserire rinvii a sezioni che non esistono nel "
+            "documento. Concludi sempre il testo prima di esaurire lo spazio."
         ),
         agent=agents["legacy_system_analyzer"],
         output_file=f"{output_dir}/{FILE_ASSESSMENT}",
@@ -79,7 +86,7 @@ def get_understanding_tasks(agents, output_dir):
             "e le interazioni reciproche tra: moduli applicativi, librerie, file di "
             "configurazione, schemi o tabelle del database e script di orchestrazione "
             "o processi batch."
-            + MERMAID_RULES
+            + MERMAID_RULES + CONVENZIONI_FASE1,
         )+ _nota_data(),
         expected_output=(
             "Un report di 'Dependency Map' in formato Markdown che DEVE "
@@ -88,6 +95,11 @@ def get_understanding_tasks(agents, output_dir):
             "e processi; 2) una tabella riassuntiva delle dipendenze; "
             "3) l'evidenza dei punti critici di accoppiamento. "
             "Un report senza il diagramma Mermaid è considerato incompleto."
+            "VINCOLO DI COMPLETEZZA: il documento deve essere COMPLETO e "
+            "autoconclusivo. Non annunciare nell'indice sezioni che non "
+            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
+            "troncate. Non inserire rinvii a sezioni che non esistono nel "
+            "documento. Concludi sempre il testo prima di esaurire lo spazio."
         ),
         agent=agents["dependency_mapper"],
         context=[assessment_task],
@@ -100,11 +112,16 @@ def get_understanding_tasks(agents, output_dir):
             "Genera la documentazione puramente TECNICA del sistema legacy: struttura "
             "del codice originario, flussi logici, gestione I/O, pattern architetturali "
             "rilevati e come i dati persistono."
-            + MERMAID_RULES
+            + MERMAID_RULES + CONVENZIONI_FASE1,
         ),
         expected_output=(
             "Un documento in Markdown contenente la Technical Documentation "
             "dettagliata del software originale."
+            "VINCOLO DI COMPLETEZZA: il documento deve essere COMPLETO e "
+            "autoconclusivo. Non annunciare nell'indice sezioni che non "
+            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
+            "troncate. Non inserire rinvii a sezioni che non esistono nel "
+            "documento. Concludi sempre il testo prima di esaurire lo spazio."
         )+ _nota_data(),
         agent=agents["tech_business_documenter"],
         context=[assessment_task, map_dependency_task],
@@ -121,11 +138,19 @@ def get_understanding_tasks(agents, output_dir):
             "2. User Stories scritte nel formato standard: "
             "'Come [ruolo], voglio [azione] affinché [valore]'.\n"
             "3. Acceptance Criteria per ogni User Story (es. GIVEN, WHEN, THEN)."
-            + MERMAID_RULES
+            + MERMAID_RULES + CONVENZIONI_FASE1,
         )+ _nota_data(),
         expected_output=(
-            "Un documento Markdown strutturato come un Product Backlog Agile, "
-            "pronto per Jira o Azure DevOps."
+            "Un documento intitolato 'Documentazione Funzionale' in formato markdown strutturato che contiene un "
+            "Product Backlog Agile completo: personas, capability, Epics, User "
+            "Stories con criteri di accettazione. Il titolo del documento è "
+            "'Documentazione Funzionale': il Product Backlog è la sua forma, "
+            "non il suo nomeUn documento."
+            "VINCOLO DI COMPLETEZZA: il documento deve essere COMPLETO e "
+            "autoconclusivo. Non annunciare nell'indice sezioni che non "
+            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
+            "troncate. Non inserire rinvii a sezioni che non esistono nel "
+            "documento. Concludi sempre il testo prima di esaurire lo spazio."
         ),
         agent=agents["functional_analyst"],
         context=[assessment_task, map_dependency_task],
@@ -139,11 +164,17 @@ def get_understanding_tasks(agents, output_dir):
             "un set di Test Funzionali (scenari di test basati sulle regole di "
             "business estratte) e di Contract Test (test di contratto per garantire "
             "l'equivalenza delle interfacce e delle API di comunicazione)."
+             + CONVENZIONI_FASE1,
         ),
         expected_output=(
             "Un documento 'Test Book' strutturato in Markdown contenente le schede "
             "dei test funzionali e i vincoli dei Contract Test necessari a validare "
             "il successo della futura modernizzazione."
+            "VINCOLO DI COMPLETEZZA: il documento deve essere COMPLETO e "
+            "autoconclusivo. Non annunciare nell'indice sezioni che non "
+            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
+            "troncate. Non inserire rinvii a sezioni che non esistono nel "
+            "documento. Concludi sempre il testo prima di esaurire lo spazio."
         )+ _nota_data(),
         agent=agents["qa_test_planner"],
         context=[documentation_task, functional_analysis_task],
@@ -199,6 +230,11 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "Un documento in formato Markdown che include il Migration Plan completo "
             "e l'elenco formale degli ADR (Architectural Decision Records) per "
             "guidare lo sviluppo."
+            "VINCOLO DI COMPLETEZZA: il documento deve essere COMPLETO e "
+            "autoconclusivo. Non annunciare nell'indice sezioni che non "
+            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
+            "troncate. Non inserire rinvii a sezioni che non esistono nel "
+            "documento. Concludi sempre il testo prima di esaurire lo spazio."
         ),
         agent=agents["cloud_solutions_architect"],
         output_file=f"{output_dir}/{FILE_MIGRATION_PLAN}",
@@ -224,6 +260,11 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
         expected_output=(
             "Uno script SQL formattato correttamente contenente le istruzioni DDL "
             "per la creazione del nuovo database relazionale."
+            "VINCOLO DI COMPLETEZZA: il documento deve essere COMPLETO e "
+            "autoconclusivo. Non annunciare nell'indice sezioni che non "
+            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
+            "troncate. Non inserire rinvii a sezioni che non esistono nel "
+            "documento. Concludi sempre il testo prima di esaurire lo spazio."
         ),
         agent=agents["database_administrator"],
         context=[migration_plan_task],
