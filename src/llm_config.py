@@ -1,7 +1,7 @@
 import os
 
 from crewai import LLM
-from fastapi import logger
+import logging
 
 # Mappa provider -> (variabile d'ambiente della chiave, prefisso LiteLLM)
 # Un provider nuovo si aggiunge qui con una riga, senza toccare la logica.
