@@ -63,7 +63,7 @@ def get_understanding_tasks(agents, output_dir):
             "del sistema sorgente. Mappa le strutture dati, i moduli software, le "
             "dipendenze esterne, le costanti e l'inventario complessivo "
             "dell'applicativo legacy analizzato."
-             + CONVENZIONI_FASE1,
+             + CONVENZIONI_FASE1
         )+ _nota_data(),
         expected_output=(
             "Un documento di 'Inventory' strutturato in formato Markdown che elenca "
@@ -86,7 +86,7 @@ def get_understanding_tasks(agents, output_dir):
             "e le interazioni reciproche tra: moduli applicativi, librerie, file di "
             "configurazione, schemi o tabelle del database e script di orchestrazione "
             "o processi batch."
-            + MERMAID_RULES + CONVENZIONI_FASE1,
+            + MERMAID_RULES + CONVENZIONI_FASE1
         )+ _nota_data(),
         expected_output=(
             "Un report di 'Dependency Map' in formato Markdown che DEVE "
@@ -112,7 +112,7 @@ def get_understanding_tasks(agents, output_dir):
             "Genera la documentazione puramente TECNICA del sistema legacy: struttura "
             "del codice originario, flussi logici, gestione I/O, pattern architetturali "
             "rilevati e come i dati persistono."
-            + MERMAID_RULES + CONVENZIONI_FASE1,
+            + MERMAID_RULES + CONVENZIONI_FASE1
         ),
         expected_output=(
             "Un documento in Markdown contenente la Technical Documentation "
@@ -138,7 +138,7 @@ def get_understanding_tasks(agents, output_dir):
             "2. User Stories scritte nel formato standard: "
             "'Come [ruolo], voglio [azione] affinché [valore]'.\n"
             "3. Acceptance Criteria per ogni User Story (es. GIVEN, WHEN, THEN)."
-            + MERMAID_RULES + CONVENZIONI_FASE1,
+            + MERMAID_RULES + CONVENZIONI_FASE1
         )+ _nota_data(),
         expected_output=(
             "Un documento intitolato 'Documentazione Funzionale' in formato markdown strutturato che contiene un "
@@ -164,7 +164,7 @@ def get_understanding_tasks(agents, output_dir):
             "un set di Test Funzionali (scenari di test basati sulle regole di "
             "business estratte) e di Contract Test (test di contratto per garantire "
             "l'equivalenza delle interfacce e delle API di comunicazione)."
-             + CONVENZIONI_FASE1,
+             + CONVENZIONI_FASE1
         ),
         expected_output=(
             "Un documento 'Test Book' strutturato in Markdown contenente le schede "
