@@ -1,21 +1,33 @@
-crewai>=0.86.0,<1.0.0
-langchain>=0.3.0,<0.4.0
-langchain-openai>=0.2.0,<0.3.0
-langchain-anthropic>=0.3.0,<0.4.0
-langchain-google-genai>=2.0.0,<3.0.0
-langchain-community>=0.3.0,<0.4.0
-langchain-ollama>=0.2.0,<0.3.0
-python-dotenv
-fastapi
-uvicorn
-httpx>=0.24,<1.0
-networkx
-dbfread
-supabase
-pyjwt
-cryptography
-python-multipart
-google-generativeai>=0.8.0,<0.9.0
-google-api-core>=2.24.0,<3.0.0
-protobuf>=5.28.0,<6.0.0
-grpcio>=1.68.0,<1.70.0
+# --- Core AI ---
+crewai==0.203.2
+litellm==1.74.9
+
+# --- LangChain ---
+langchain==0.3.30
+langchain-openai==0.2.14
+langchain-anthropic==0.3.22
+langchain-google-genai==2.0.10
+langchain-community==0.3.31
+langchain-ollama==0.2.3
+
+# --- Web / API ---
+fastapi==0.141.0
+uvicorn==0.52.0
+python-multipart==0.0.32
+httpx==0.28.1
+
+# --- Dati e utility ---
+networkx==3.6.1
+dbfread==2.0.7
+python-dotenv==1.2.2
+
+# --- Supabase / Auth ---
+supabase==2.31.0
+pyjwt==2.13.0
+cryptography==49.0.0
+
+# --- Google SDK ---
+google-generativeai==0.8.6
+google-api-core==2.33.0
+protobuf==5.29.6
+grpcio==1.69.0
