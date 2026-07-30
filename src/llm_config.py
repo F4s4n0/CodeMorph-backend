@@ -1,6 +1,7 @@
 import os
 
 from crewai import LLM
+from fastapi import logger
 
 # Mappa provider -> (variabile d'ambiente della chiave, prefisso LiteLLM)
 # Un provider nuovo si aggiunge qui con una riga, senza toccare la logica.
@@ -44,7 +45,7 @@ def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERAT
             model=f"ollama/{model_name}",
             base_url=os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL),
             temperature=temperature,
-            max_tokens=max_tokens,
+            max_tokens=max_tokens or DEFAULT_MAX_TOKENS,
             
         )
 
@@ -70,7 +71,8 @@ def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERAT
     # I modelli più recenti rifiutano temperature: va omesso, non azzerato
     if _accetta_temperature(model_name):
         parametri["temperature"] = temperature
-    if max_tokens:
-        parametri["max_tokens"] = max_tokens or DEFAULT_MAX_TOKENS
+    parametri["max_tokens"] = max_tokens or DEFAULT_MAX_TOKENS
 
+    logger.info("LLM: %s | max_tokens=%s | reasoning=%s",
+        model_name, parametri.get("max_tokens"), parametri.get("reasoning_effort"))
     return LLM(**parametri)
