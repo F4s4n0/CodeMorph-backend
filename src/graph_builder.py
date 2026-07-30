@@ -115,7 +115,7 @@ def extract_dependencies_from_file(file_name, file_content, llm, tracker=None):
         goal='Estrarre le dipendenze strutturali software o database e restituire un JSON valido.',
         backstory=(
             "Sei un analista sintattico specializzato in refactoring e reverse "
-            "engineering, incluso codice legacy Visual FoxPro."
+            "engineering, incluso codice legacy di qualsiasi tecnologia."
         ),
         llm=llm,
         verbose=False,
@@ -206,7 +206,10 @@ def _genera_report_grafo(G):
     gradi_ingresso = dict(G.in_degree())
     nodi_ordinati = sorted(gradi_ingresso.items(), key=lambda item: item[1], reverse=True)
 
-    righe = ["REPORT GRAFO DELLE DIPENDENZE E SCHEMI DATABASE (VISUAL FOXPRO DETECTED):\n"]
+    
+    intestazione = "REPORT GRAFO DELLE DIPENDENZE E SCHEMI DATABASE"
+    report_grafo = intestazione + ":\n\n"
+    righe = ["REPORT GRAFO DELLE DIPENDENZE E SCHEMI DATABASE:\n"]
     for nodo, conteggio in nodi_ordinati:
         dipendenze = list(G.successors(nodo))
         righe.append(f"- Modulo/File: {nodo}")

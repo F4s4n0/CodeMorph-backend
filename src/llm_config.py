@@ -21,7 +21,7 @@ DEFAULT_OLLAMA_URL = "http://localhost:11434"
 MODELLI_SENZA_TEMPERATURE = ("opus-5", "sonnet-5", "fable-5", "mythos-5")
 # Output massimo per risposta. I documenti di fase sono lunghi: con il default
 # dei provider vengono troncati a metà 
-DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "64000"))
+DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "32.000"))
 
 def _accetta_temperature(model_name):
     nome = (model_name or "").lower()

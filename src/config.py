@@ -37,7 +37,13 @@ FILE_QUALITY_REPORT   = "7_Quality_Check_Report.md"
 FILE_VALIDATION_FASE1 = "8_Validation_Report_Fase1.md"
 FILE_VALIDATION_FASE2 = "9_Validation_Report_Fase2.md"
 FILE_VALIDATION_FASE3 = "10_Validation_Report_Fase3.md"
-VALIDAZIONE_MAX_CHARS = 40000   # tetto al contesto inviato al validatore
+# Tetto al contesto inviato al validatore. Deve reggere TUTTI i documenti
+# di fase: con 40k il gate vedeva solo il primo e bocciava per assenza
+# degli altri (che invece erano completi su disco).
+VALIDAZIONE_MAX_CHARS = 250_000
+# Quota massima per singolo documento: garantisce che ognuno sia
+# rappresentato, invece di consumare tutto il budget sul primo.
+VALIDAZIONE_MAX_CHARS_PER_DOC = 45_000
 # Pausa tra l'analisi di un file e il successivo. Serve a non saturare i
 # limiti per minuto del provider su progetti con molti file.
 # 0 = nessuna pausa (progetti piccoli), 1-2s = prudente su progetti grandi.

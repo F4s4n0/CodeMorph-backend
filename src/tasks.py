@@ -424,6 +424,10 @@ def get_quality_check_task(
             "Sono dati che non puoi misurare leggendo il codice: riportarli sarebbe "
             "un'informazione falsa. Limitati a rilievi qualitativi verificabili, "
             "citando file, funzione o riga."
+            "NOTA SUGLI ESTRATTI: i documenti molto lunghi ti vengono forniti "
+            "parzialmente, con un marcatore esplicito nel punto di interruzione. "
+            "Un estratto interrotto NON è un difetto del documento: non segnalarlo "
+            "come troncamento e non bocciare per questo motivo."
         )+ _nota_data(),
         expected_output=(
             "Un report di 'Quality Check' in Markdown con: sintesi della revisione, "

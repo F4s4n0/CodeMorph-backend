@@ -24,7 +24,8 @@ from src.config import (
     FILE_VALIDATION_FASE2,
     FILE_VALIDATION_FASE3,
     VALIDAZIONE_MAX_CHARS,
-    DELAY_TRA_FILE_SEC
+    DELAY_TRA_FILE_SEC,
+    VALIDAZIONE_MAX_CHARS_PER_DOC
 )
 from src.live_log import crea_logger_attivita, log_message
 from src.tasks import (
@@ -498,8 +499,19 @@ def _valida_fase(llm, output_dir, nome_fase, file_da_validare, nome_report,
     documenti = []
     for nome in file_da_validare:
         contenuto = _read_if_exists(f"{output_dir}/{nome}", "")
-        if contenuto:
-            documenti.append(f"### {nome}\n{contenuto}")
+        if not contenuto:
+            continue
+        # Quota EQUA per documento: senza questo il primo documento lungo
+        # consuma tutto il budget e gli altri non arrivano affatto al gate,
+        # che li segnala come "mancanti" pur essendo completi su disco.
+        if len(contenuto) > VALIDAZIONE_MAX_CHARS_PER_DOC:
+            contenuto = (
+                contenuto[:VALIDAZIONE_MAX_CHARS_PER_DOC]
+                + "\n\n[...estratto interrotto qui per limiti di contesto del validatore: "
+                  "il documento originale prosegue ed è completo...]"
+            )
+        documenti.append(f"### {nome}\n{contenuto}")
+
     if not documenti:
         logger.warning("Validazione %s saltata: nessun documento trovato.", nome_fase)
         return None
