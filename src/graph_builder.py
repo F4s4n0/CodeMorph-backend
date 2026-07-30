@@ -14,18 +14,62 @@ import interruzione
 from src.config import DELAY_TRA_FILE_SEC
 from src.live_log import log_message
 
-# --- LISTE DI FILTRAGGIO ---
 ESCLUDI_CARTELLE = {
-    '.git', 'node_modules', 'vendor', 'venv', 'env', '__pycache__',
-    'bin', 'obj', 'dist', 'build', '.idea', '.vscode',
+    # Controllo di versione
+    '.git', '.svn', '.hg', 'cvs',
+    # Dipendenze
+    'node_modules', 'vendor', 'packages', 'bower_components',
+    'venv', 'env', '.venv', 'site-packages',
+    # Build e artefatti
+    'bin', 'obj', 'dist', 'build', 'target', 'out', 'release', 'debug',
+    '__pycache__', '.pytest_cache', '.mypy_cache', 'coverage', 'testresults',
+    # IDE
+    '.idea', '.vscode', '.vs', '__history', '__recovery',
+    # Backup tipici dei progetti legacy
+    'backup', 'backups', 'old', 'vecchio',
 }
 
-# Estensioni native di Visual FoxPro incluse:
-# .prg (programmi), .scx (form), .dbf (tabelle)
+# Estensioni dei file che vengono letti e analizzati.
+# I formati binari FoxPro (.scx, .dbf) hanno estrattori dedicati; gli altri
+# vengono letti come testo. NON aggiungere qui binari senza estrattore
+# (.mdb Access, .pbl PowerBuilder): produrrebbero caratteri illeggibili
+# che gli agenti analizzerebbero comunque, a spese del cliente.
 ESTENSIONI_VALIDE = {
-    '.php', '.py', '.js', '.ts', '.java', '.cs', '.html', '.css',
-    '.cpp', '.c', '.h', '.go', '.rs', '.sql', '.json',
-    '.prg', '.scx', '.dbf',
+    # --- Visual FoxPro (estrattori nativi per .scx e .dbf) ---
+    '.prg', '.scx', '.dbf', '.vcx', '.mnx', '.spr',
+
+    # --- Visual Basic 6 ---
+    '.bas', '.frm', '.cls', '.ctl', '.vbp', '.dsr',
+
+    # --- Delphi / Pascal ---
+    '.pas', '.dpr', '.dfm', '.dpk', '.inc',
+
+    # --- COBOL e mainframe ---
+    '.cbl', '.cob', '.cpy', '.jcl', '.pco', '.ddl',
+
+    # --- AS/400 - RPG ---
+    '.rpg', '.rpgle', '.sqlrpgle', '.clp', '.clle', '.dds',
+
+    # --- Altri legacy ---
+    '.f', '.f77', '.f90', '.for',           # Fortran
+    '.asm', '.s',                            # Assembly
+    '.pl', '.pm',                            # Perl
+    '.tcl', '.awk',                          # scripting legacy
+    '.4gl', '.per',                          # Informix 4GL
+    '.p', '.w', '.i',                        # Progress OpenEdge
+    '.abap',                                 # SAP ABAP
+    '.vb',                                   # VB.NET
+
+    # --- Linguaggi moderni (sistemi misti e stack target) ---
+    '.cs', '.java', '.py', '.js', '.ts', '.jsx', '.tsx',
+    '.php', '.go', '.rs', '.rb', '.kt', '.swift', '.scala',
+    '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp',
+
+    # --- Dati, configurazione, markup ---
+    '.sql', '.json', '.xml', '.yaml', '.yml', '.ini', '.conf', '.config',
+    '.html', '.htm', '.css', '.scss',
+    '.asp', '.aspx', '.ascx', '.jsp',        # pagine server-side legacy
+    '.bat', '.cmd', '.sh', '.ps1',           # script di lancio e job
 }
 
 MAX_FILE_SIZE = 250 * 1024
