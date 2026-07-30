@@ -424,10 +424,9 @@ def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
     finally:
         interruzione.pulisci(session_id)
 
-@app.post("/api/v1/modernize/understand")
 @app.post("/api/v1/modernize/understand", status_code=202)
 def fase1_understand(
-    background_tasks: BackgroundTasks,          # ← NUOVO parametro
+    background_tasks: BackgroundTasks,
     provider_llm: str = Form(...),
     modello_llm: str = Form(...),
     session_id: str = Form(...),
@@ -444,38 +443,19 @@ def fase1_understand(
     # Credito token: blocca subito (402) chi ha esaurito la quota
     verifica_credito_token(user_id)
 
-    if not file and not codice_legacy:
-        raise HTTPException(status_code=400, detail="Fornisci un file ZIP oppure del codice testuale.")
-
     cartella_output = _cartella_sessione(session_id)
     cartella_output.mkdir(parents=True, exist_ok=True)
-    (cartella_output / "sorgenti_originali").mkdir(exist_ok=True)
-
-    # IMPORTANTE: il file caricato va salvato ORA. Dopo la risposta HTTP
-    # lo stream di UploadFile viene chiuso e il background non lo vedrebbe più.
-    ha_file = file is not None
-    if ha_file:
-        zip_path = cartella_output / "solution_upload.zip"
-        with open(zip_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-    # Registrazione della sessione (come prima)
-    try:
-       supabase.table("migration_sessions").upsert({
-            "id": session_id,
-            "user_id": user_id,
-            "session_name": session_name,
-            "current_step": "input",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).execute()
-    except Exception as e:
-        logger.error("Registrazione sessione fallita: %s", e)
-
-    _imposta_stato_esecuzione(session_id, "running", fase="fase1")
-    log_message(session_id, "⚡ Ricezione completata: elaborazione avviata sul server.")
-    # Se i sorgenti sono già stati estratti da /prepara, non serve il file
     cartella_sorgenti = cartella_output / "sorgenti_originali"
-    gia_estratto = cartella_sorgenti.exists() and any(cartella_sorgenti.iterdir())
+    cartella_sorgenti.mkdir(exist_ok=True)
+
+    # Tre modalità valide: ZIP appena caricato, sorgenti già estratti da
+    # /prepara (il client manda solo la selezione), oppure codice incollato.
+    gia_estratto = any(cartella_sorgenti.iterdir())
+    if not file and not gia_estratto and not (codice_legacy and codice_legacy.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Fornisci un archivio .zip della Solution oppure il codice legacy come testo.",
+        )
 
     ammessi = None
     if file_selezionati:
@@ -485,12 +465,37 @@ def fase1_understand(
                 raise ValueError
         except Exception:
             raise HTTPException(status_code=400, detail="Elenco dei file selezionati non valido.")
-        
+
+    # IMPORTANTE: il file caricato va salvato ORA. Dopo la risposta HTTP
+    # lo stream di UploadFile viene chiuso e il background non lo vedrebbe più.
+    ha_file = file is not None
+    if ha_file:
+        zip_path = cartella_output / "solution_upload.zip"
+        with open(zip_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+    # Registrazione della sessione
+    try:
+        supabase.table("migration_sessions").upsert({
+            "id": session_id,
+            "user_id": user_id,
+            "session_name": session_name,
+            "current_step": "input",
+            "quality_gate": quality_gate,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as e:
+        logger.error("Registrazione sessione fallita: %s", e)
+
+    _imposta_stato_esecuzione(session_id, "running", fase="fase1")
+    log_message(session_id, "⚡ Ricezione completata: elaborazione avviata sul server.")
+
     background_tasks.add_task(
         _lavoro_fase1, session_id, user_id, provider_llm, modello_llm,
         ha_file, codice_legacy, quality_gate, ammessi, gia_estratto,
     )
     return {"status": "avviata", "session_id": session_id}
+
 # =====================================================================
 # LOG LIVE
 # =====================================================================
