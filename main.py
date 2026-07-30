@@ -359,6 +359,7 @@ def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
     cartella_sorgenti = cartella_output / "sorgenti_originali"
 
     try:
+        
         _imposta_stato_esecuzione(session_id, "running", fase="fase1")
         llm = get_llm(provider=provider_llm, model_name=modello_llm)
 
@@ -403,6 +404,18 @@ def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
         log_message(session_id, "✨ [SUCCESS]: Fase 1 completata. Report pronti per l'ispezione umana.")
 
+        # La Fase 1 è finita: la sessione è ora al Checkpoint 1.
+        # Senza questo aggiornamento il DB resta a "input" e ricaricando
+        # il progetto l'utente ripartirebbe dall'inizio.
+        try:
+            supabase.table("migration_sessions").upsert({
+                "id": session_id,
+                "user_id": user_id,
+                "current_step": "cp1",
+            }).execute()
+        except Exception as e:
+            logger.error("Aggiornamento current_step fallito per %s: %s", session_id, e)
+            
         _imposta_stato_esecuzione(
             session_id, "completata", fase="fase1",
             risultato={"token": blocco_token,
