@@ -2,8 +2,9 @@ import json
 import logging
 import os
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from crewai import Crew, Process
-
 from src.agents import create_agents
 from src.config import (
     FILE_ASSESSMENT,
@@ -72,6 +73,30 @@ def _salva_output_su_disco(tasks, output_dir):
         percorso = os.path.join(output_dir, os.path.basename(percorso_task))
         try:
             contenuto = _task_output_text(task)
+            if percorso.lower().endswith(".md"):
+                # Intestazione in Markdown PURO: nessun file esterno referenziato,
+                # così il documento resta integro ovunque venga spostato o inviato.
+                nome_doc = os.path.splitext(os.path.basename(percorso))[0]
+                nome_doc = nome_doc.split("_", 1)[-1].replace("_", " ")
+                data_oggi = datetime.now(ZoneInfo("Europe/Rome")).strftime("%d/%m/%Y")
+                intestazione = (
+                    "<div align=\"center\">\n\n"
+                    "# ⬢ CodeMorph`.AI`\n\n"
+                    "**Piattaforma di modernizzazione di sistemi legacy**\n\n"
+                    "</div>\n\n"
+                    "---\n\n"
+                    f"### {nome_doc}\n\n"
+                    f"| | |\n"
+                    f"|---|---|\n"
+                    f"| **Generato il** | {data_oggi} |\n"
+                    f"| **Piattaforma** | CodeMorph.AI — www.codemorph.it |\n"
+                    f"| **Natura del documento** | Prodotto da modelli di intelligenza artificiale |\n\n"
+                    "> ⚠️ **Validazione richiesta.** Il contenuto di questo documento è generato "
+                    "automaticamente e può contenere imprecisioni o omissioni. Prima di ogni "
+                    "utilizzo operativo deve essere verificato da personale tecnico qualificato.\n\n"
+                    "---\n\n"
+                )
+                contenuto = intestazione + contenuto
             os.makedirs(output_dir, exist_ok=True)
             with open(percorso, "w", encoding="utf-8") as f:
                 f.write(contenuto)
