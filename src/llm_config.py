@@ -10,9 +10,19 @@ _PROVIDERS = {
     "google":    ("GOOGLE_API_KEY",    "gemini/"),
 }
 
+
+
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
+# Modelli che NON accettano più il parametro temperature (deprecato lato API).
+# Confronto per sottostringa: copre anche le varianti con data.
+MODELLI_SENZA_TEMPERATURE = ("opus-5", "sonnet-5", "fable-5", "mythos-5")
+
+
+def _accetta_temperature(model_name):
+    nome = (model_name or "").lower()
+    return not any(m in nome for m in MODELLI_SENZA_TEMPERATURE)
 
 def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERATURE, max_tokens=None):
     """
@@ -46,9 +56,14 @@ def get_llm(provider="openai", model_name="gpt-4o", temperature=DEFAULT_TEMPERAT
     if not api_key:
         raise ValueError(f"Errore: la chiave {env_var} non è configurata o è vuota.")
 
-    return LLM(
-        model=f"{prefisso}{model_name}",
-        api_key=api_key,
-        temperature=temperature,
-         max_tokens=max_tokens,
-    )
+    parametri = {
+        "model": f"{prefisso}{model_name}",
+        "api_key": api_key,
+    }
+    # I modelli più recenti rifiutano temperature: va omesso, non azzerato
+    if _accetta_temperature(model_name):
+        parametri["temperature"] = temperature
+    if max_tokens:
+        parametri["max_tokens"] = max_tokens
+
+    return LLM(**parametri)
