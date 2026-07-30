@@ -221,7 +221,7 @@ def _genera_report_grafo(G):
     return "\n".join(righe)
 
 
-def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None):
+def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None, file_ammessi=None):
     """
     Itera sui file applicando filtri avanzati (parser nativi per FoxPro,
     lettura diretta per il codice standard), costruisce il grafo delle
@@ -236,7 +236,8 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None)
             file_path = os.path.join(root, file)
             estensione = os.path.splitext(file)[1].lower()
 
-            if estensione not in ESTENSIONI_VALIDE:
+            relativo = os.path.relpath(file_path, cartella_sorgente).replace("\\", "/")
+            if file_ammessi is not None and relativo not in file_ammessi:
                 continue
 
             content = _estrai_contenuto_file(file_path, estensione, session_id)

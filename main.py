@@ -5,6 +5,10 @@ import shutil
 import zipfile
 import storage
 import interruzione
+import json
+from src.preparazione import analizza_sorgenti
+from src.graph_builder import ESCLUDI_CARTELLE, ESTENSIONI_VALIDE, MAX_FILE_SIZE
+
 
 
 from pathlib import Path
@@ -253,6 +257,50 @@ def require_admin(user_id: str = Depends(get_current_user)):
         )
     return user_id
 
+# =====================================================================
+# ENDPOINT DI PREPARAZIONE SORGENTI (ZIP)
+# =====================================================================
+
+@app.post("/api/v1/modernize/prepara/{session_id}")
+def prepara_sorgenti(
+    session_id: str,
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_and_validate_license),
+):
+    """
+    Estrae lo ZIP e restituisce l'elenco dei file candidati all'analisi,
+    con i rilevanti già selezionati. Non avvia nulla: l'utente conferma.
+    """
+    session_id = _valida_session_id(session_id)
+    _verifica_proprieta_sessione(session_id, user_id)
+    verifica_credito_token(user_id)
+
+    if not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Carica un archivio .zip")
+
+    cartella_output = _cartella_sessione(session_id)
+    cartella_output.mkdir(parents=True, exist_ok=True)
+    cartella_sorgenti = cartella_output / "sorgenti_originali"
+    cartella_sorgenti.mkdir(exist_ok=True)
+
+    zip_path = cartella_output / "solution_upload.zip"
+    with open(zip_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        _estrai_zip_sicuro(zip_path, cartella_sorgenti)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Il file non è un archivio ZIP valido o è corrotto.")
+
+    elenco = analizza_sorgenti(
+        str(cartella_sorgenti), ESCLUDI_CARTELLE, ESTENSIONI_VALIDE, MAX_FILE_SIZE,
+    )
+    if not elenco:
+        raise HTTPException(
+            status_code=400,
+            detail="Nessun file di codice riconosciuto nell'archivio.",
+        )
+    return {"file": elenco, "totale": len(elenco)}
 
 # =====================================================================
 # ENDPOINT DI STATO SESSIONE
@@ -301,7 +349,7 @@ def interrompi_fase(session_id: str, user_id: str = Depends(get_current_user)):
 # =====================================================================
 
 def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
-                  ha_file, codice_legacy, quality_gate):
+                  ha_file, codice_legacy, quality_gate,file_ammessi=None, gia_estratto=False):
     """
     Elaborazione della Fase 1 in background: tutto ciò che prima stava
     dentro il try dell'endpoint. Non solleva mai: registra l'esito su DB.
@@ -314,15 +362,25 @@ def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
         _imposta_stato_esecuzione(session_id, "running", fase="fase1")
         llm = get_llm(provider=provider_llm, model_name=modello_llm)
 
-        if ha_file:
-            log_message(session_id, "🗂️ Estrazione dell'archivio e analisi delle dipendenze...")
-            zip_path = cartella_output / "solution_upload.zip"
-            try:
-                _estrai_zip_sicuro(zip_path, cartella_sorgenti)
-            except zipfile.BadZipFile:
-                raise ValueError("Il file non è un archivio ZIP valido o è corrotto.")
+        if ha_file or gia_estratto:
+            if gia_estratto:
+                # I sorgenti sono già stati estratti dall'endpoint /prepara:
+                # ri-estrarre sovrascriverebbe inutilmente i file.
+                log_message(session_id, "📂 Sorgenti già estratti: avvio analisi delle dipendenze...")
+            else:
+                log_message(session_id, "🗂️ Estrazione dell'archivio e analisi delle dipendenze...")
+                zip_path = cartella_output / "solution_upload.zip"
+                try:
+                    _estrai_zip_sicuro(zip_path, cartella_sorgenti)
+                except zipfile.BadZipFile:
+                    raise ValueError("Il file non è un archivio ZIP valido o è corrotto.")
+
+            if file_ammessi:
+                log_message(session_id, f"🎯 Analisi limitata ai {len(file_ammessi)} file selezionati.")
+
             codice_da_analizzare = process_directory_to_graph(
-                cartella_sorgenti, llm, session_id, tracker=tracker
+                cartella_sorgenti, llm, session_id, tracker=tracker,
+                file_ammessi=set(file_ammessi) if file_ammessi else None,
             )
         else:
             log_message(session_id, "📝 Analisi dello script di testo singolo avviata...")
@@ -378,6 +436,7 @@ def fase1_understand(
     codice_legacy: Optional[str] = Form(None),
     user_id: str = Depends(get_current_user_and_validate_license),
     quality_gate: bool = Form(False),
+    file_selezionati: Optional[str] = Form(None),   # JSON: ["path/a.cs", ...]
 ):
     session_id = _valida_session_id(session_id)
     _verifica_proprieta_sessione(session_id, user_id)
@@ -414,10 +473,22 @@ def fase1_understand(
 
     _imposta_stato_esecuzione(session_id, "running", fase="fase1")
     log_message(session_id, "⚡ Ricezione completata: elaborazione avviata sul server.")
+    # Se i sorgenti sono già stati estratti da /prepara, non serve il file
+    cartella_sorgenti = cartella_output / "sorgenti_originali"
+    gia_estratto = cartella_sorgenti.exists() and any(cartella_sorgenti.iterdir())
 
+    ammessi = None
+    if file_selezionati:
+        try:
+            ammessi = json.loads(file_selezionati)
+            if not isinstance(ammessi, list) or not ammessi:
+                raise ValueError
+        except Exception:
+            raise HTTPException(status_code=400, detail="Elenco dei file selezionati non valido.")
+        
     background_tasks.add_task(
         _lavoro_fase1, session_id, user_id, provider_llm, modello_llm,
-        ha_file, codice_legacy, quality_gate,
+        ha_file, codice_legacy, quality_gate, ammessi, gia_estratto,
     )
     return {"status": "avviata", "session_id": session_id}
 # =====================================================================

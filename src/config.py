@@ -52,6 +52,25 @@ DELAY_TRA_FILE_SEC = float(os.getenv("DELAY_TRA_FILE_SEC", "1"))
 # File di checkpoint per la fase iterativa (permette il resume dopo un crash)
 FILE_IMPL_CHECKPOINT  = "_implementation_checkpoint.json"
 
+# File generati automaticamente o senza logica di business: esclusi PRIMA
+# di arrivare al modello, quindi a costo zero. (pattern, motivo mostrato)
+DEFAULT_ESCLUSIONI_PATTERN = [
+    (".designer.cs",      "Codice generato dal designer di Visual Studio"),
+    (".g.cs",             "Codice generato automaticamente"),
+    (".g.i.cs",           "Codice generato automaticamente"),
+    ("assemblyinfo.cs",   "Metadati di assembly"),
+    (".min.js",           "JavaScript minificato"),
+    (".min.css",          "CSS minificato"),
+    ("package-lock.json", "Lock file delle dipendenze"),
+    ("composer.lock",     "Lock file delle dipendenze"),
+    (".pb.go",            "Codice generato da Protocol Buffers"),
+    ("_pb2.py",           "Codice generato da Protocol Buffers"),
+]
+
+# Cartelle da ignorare del tutto (build, dipendenze, IDE)
+ESCLUDI_CARTELLE_EXTRA = {
+    '.vs', 'packages', 'TestResults', 'coverage', 'third_party', 'libs',
+}
 
 # Regole di intestazione comuni a TUTTI i documenti della Fase 1.
 # Nascono da un rilievo del Quality Gate: ogni agente si numerava da sé
