@@ -66,16 +66,15 @@ def get_understanding_tasks(agents, output_dir):
              + CONVENZIONI_FASE1
         )+ _nota_data(),
         expected_output=(
+           expected_output=(
             "Un documento di 'Inventory' strutturato in formato Markdown che elenca "
             "in modo esaustivo tutti gli asset identificati nel codice legacy, la "
             "tipologia dei file, le dimensioni e l'analisi statica iniziale. "
             "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO: non annunciare nell'indice sezioni che non "
-            "svilupperai, e concludi il testo prima di esaurire lo spazio "
-            "disponibile. Meglio 6 sezioni complete che 13 troncate." Non annunciare nell'indice sezioni che non "
-            "svilupperai: meglio 6 sezioni complete che 16 dichiarate e "
-            "troncate. Non inserire rinvii a sezioni che non esistono nel "
-            "documento. Concludi sempre il testo prima di esaurire lo spazio."
+            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
+            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
+            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
+            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
         ),
         agent=agents["legacy_system_analyzer"],
         output_file=f"{output_dir}/{FILE_ASSESSMENT}",
