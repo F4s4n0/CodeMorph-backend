@@ -610,6 +610,42 @@ class InputProfiloFatturazione(BaseModel):
 # Endpoint
 # =====================================================================
 
+@router.get("/tokens/consumo-sessioni")
+def consumo_per_sessione(user_id: str = Depends(get_current_user)):
+    """
+    Quanto è costata ogni sessione: token consumati ed euro addebitati.
+    Ritorna una mappa { session_id: {tokens, euro, operazioni} }.
+
+    L'aggregazione avviene qui e non in SQL perché PostgREST non espone
+    GROUP BY: su volumi normali (poche centinaia di righe per utente)
+    la differenza è irrilevante.
+    """
+    try:
+        r = (supabase.table("token_transactions")
+             .select("session_id,importo_eur,tokens_totali,tipo")
+             .eq("user_id", user_id)
+             .execute())
+    except Exception as e:
+        logger.error("Lettura consumi per sessione fallita (%s): %s", user_id, e)
+        raise HTTPException(status_code=503, detail="Servizio non disponibile.")
+
+    consumi = {}
+    for riga in (r.data or []):
+        sid = riga.get("session_id")
+        if not sid:
+            continue                      # ricariche e accrediti non hanno sessione
+        # Gli addebiti sono negativi: al cliente mostriamo il valore assoluto
+        importo = abs(float(riga.get("importo_eur") or 0))
+        tokens = int(riga.get("tokens_totali") or 0)
+        voce = consumi.setdefault(sid, {"euro": 0.0, "tokens": 0, "operazioni": 0})
+        voce["euro"] += importo
+        voce["tokens"] += tokens
+        voce["operazioni"] += 1
+
+    for voce in consumi.values():
+        voce["euro"] = round(voce["euro"], 4)
+    return consumi
+
 @router.get("/payments/config")
 def configurazione_pagamenti(user_id: str = Depends(get_current_user)):
     """Dati per inizializzare i bottoni PayPal / Google Pay nel frontend."""
