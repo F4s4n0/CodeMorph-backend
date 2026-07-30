@@ -11,7 +11,7 @@ _PROVIDERS = {
     "google":    ("GOOGLE_API_KEY",    "gemini/"),
 }
 
-
+logger = logging.getLogger(__name__)
 
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
