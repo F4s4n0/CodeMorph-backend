@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from contacts import router as contacts_router
 
-from auth import get_current_user, get_current_user_and_validate_license, supabase
+from auth import _parse_expiry, get_current_user, get_current_user_and_validate_license, supabase
 from payments import addebita_consumo_token, verifica_credito_token
 from payments import router as payments_router
 from src.code_unpacker import unpack_markdown_to_files
@@ -83,15 +83,15 @@ app.include_router(contacts_router)
 class InputFase2(BaseModel):
     session_id: str
     linguaggio_target: str
-    provider_llm: str = "openai"
-    modello_llm: str = "gpt-4o"
+    provider_llm: str = "anthropic"
+    modello_llm: str = "claude-sonnet-5"
     quality_gate: bool = False
 
 class InputFase3(BaseModel):
     session_id: str
     linguaggio_target: str
-    provider_llm: str = "openai"
-    modello_llm: str = "gpt-4o"
+    provider_llm: str = "anthropic"
+    modello_llm: str = "claude-sonnet-5"
     quality_gate: bool = False
 
 
@@ -312,19 +312,43 @@ def stato_esecuzione(session_id: str, user_id: str = Depends(get_current_user)):
     """
     Avanzamento della sessione: il frontend lo interroga in polling mentre
     la fase gira in background.
+
+    Se l'elaborazione risulta ferma da oltre un'ora, il campo
+    `possibile_blocco` lo segnala al frontend. Nessuna decisione automatica:
+    su progetti grandi un'attesa lunga è legittima, quindi è il cliente a
+    scegliere se attendere ancora o chiudere l'elaborazione.
     """
     session_id = _valida_session_id(session_id)
     _verifica_proprieta_sessione(session_id, user_id)
+
     try:
         r = (supabase.table("migration_sessions")
-             .select("stato_esecuzione,fase_in_corso,errore_messaggio,risultato,current_step")
+             .select("stato_esecuzione,fase_in_corso,errore_messaggio,risultato,current_step,updated_at")
              .eq("id", session_id).execute())
     except Exception as e:
         logger.error("Lettura stato esecuzione fallita per %s: %s", session_id, e)
         raise HTTPException(status_code=503, detail="Servizio non disponibile.")
+
     if not r.data:
         raise HTTPException(status_code=404, detail="Sessione non trovata.")
-    return r.data[0]
+
+    dati = r.data[0]
+    dati["possibile_blocco"] = False
+    dati["fermo_da_minuti"] = None
+
+    if dati.get("stato_esecuzione") == "running":
+        try:
+            aggiornato = datetime.fromisoformat(dati["updated_at"].replace("Z", "+00:00"))
+            if aggiornato:
+                minuti = int((datetime.now(timezone.utc) - aggiornato).total_seconds() // 60)
+                dati["fermo_da_minuti"] = minuti
+                dati["possibile_blocco"] = minuti >= 60
+        except Exception:
+            # Il calcolo è un di più: se il formato della data non si legge,
+            # lo stato viene restituito comunque senza segnalazione.
+            pass
+
+    return dati
 
 # =====================================================================
 # ENDPOINT DI STOP SESSIONE
@@ -495,6 +519,8 @@ def fase1_understand(
             "session_name": session_name,
             "current_step": "input",
             "quality_gate": quality_gate,
+            "provider_llm": provider_llm,
+            "modello_llm": modello_llm,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
     except Exception as e:
