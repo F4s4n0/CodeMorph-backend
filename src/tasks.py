@@ -223,6 +223,11 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "2. Gli Architectural Decision Records (ADR) che motivano formalmente la "
             "scelta dei nuovi pattern di design, la struttura delle cartelle, i "
             "modelli database e lo standard delle API nel nuovo sistema target."
+            "\n\nCODICE SORGENTE LEGACY (evidenza primaria):\n"
+            "In caso di discrepanza tra la documentazione della fase precedente "
+            "e il codice, fa fede il codice. Non attribuire al sistema componenti, "
+            "tabelle o campi che non trovi qui.\n"
+            "{contesto_sorgenti}\n"
             + MERMAID_RULES
             + blocco_contesto
         )+ _nota_data(),
@@ -255,6 +260,11 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "IMPORTANTE: l'output deve essere SOLO SQL valido (con commenti `--` "
             "dove serve), senza testo Markdown attorno, perché verrà salvato come "
             "file .sql eseguibile."
+            "\n\nCODICE SORGENTE LEGACY (evidenza primaria):\n"
+            "In caso di discrepanza tra la documentazione della fase precedente "
+            "e il codice, fa fede il codice. Non attribuire al sistema componenti, "
+            "tabelle o campi che non trovi qui.\n"
+            "{contesto_sorgenti}\n"
             + blocco_contesto
         )+ _nota_data(),
         expected_output=(

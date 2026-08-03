@@ -11,7 +11,7 @@ from dbfread import DBF  # Libreria nativa per FoxPro
 # lettura dei log live). L'import resta qui anche come re-export per il
 # codice esistente che lo importava da questo modulo.
 import interruzione
-from src.config import DELAY_TRA_FILE_SEC
+from src.config import DELAY_TRA_FILE_SEC, MAX_CARATTERI_SORGENTI
 from src.live_log import log_message
 
 ESCLUDI_CARTELLE = {
@@ -244,6 +244,74 @@ def _estrai_contenuto_file(file_path, estensione, session_id):
         log_message(session_id, f"Impossibile leggere il file {file}: {e}")
         return None
 
+def raccogli_sorgenti(cartella_sorgente, max_caratteri=None, file_ammessi=None):
+    """
+    Rilegge i sorgenti dalla cartella di sessione e li restituisce come
+    testo unico, pronto da passare agli agenti come evidenza primaria.
+
+    Usata dalla Fase 2 (e potenzialmente dal Quality Gate): senza questo,
+    architetto e DBA progettano basandosi solo sui documenti della Fase 1,
+    cioè su una descrizione di secondo livello del sistema.
+    """
+    if max_caratteri is None:
+        max_caratteri = MAX_CARATTERI_SORGENTI
+
+    parti, usati = [], 0
+    for root, dirs, files in os.walk(cartella_sorgente):
+        dirs[:] = [d for d in dirs if d not in ESCLUDI_CARTELLE]
+        for file in sorted(files):
+            estensione = os.path.splitext(file)[1].lower()
+            if estensione not in ESTENSIONI_VALIDE:
+                continue
+            file_path = os.path.join(root, file)
+            relativo = os.path.relpath(file_path, cartella_sorgente).replace("\\", "/")
+            if file_ammessi is not None and relativo not in file_ammessi:
+                continue
+
+            contenuto = _estrai_contenuto_file(file_path, estensione, None)
+            if not contenuto:
+                continue
+
+            blocco = f"\n----- FILE: {relativo} -----\n{contenuto}\n"
+            if usati + len(blocco) > max_caratteri:
+                parti.append("\n[...contesto troncato per limiti di dimensione...]")
+                return "".join(parti)
+            parti.append(blocco)
+            usati += len(blocco)
+
+    return "".join(parti)
+
+def _componi_contesto(G, sorgenti, session_id=None):
+    """
+    Contesto per gli agenti della Fase 1: il grafo delle relazioni PIÙ il
+    codice sorgente reale.
+
+    Senza i sorgenti gli agenti documentano solo nomi di moduli: non possono
+    citare funzioni né logica, e i nodi imprecisi del grafo (dipendenze
+    dedotte dal micro-agente) diventano "fatti" nei documenti finali.
+    """
+    parti = [_genera_report_grafo(G)]
+    parti.append("\n\n" + "=" * 70)
+    parti.append("CODICE SORGENTE DEI FILE ANALIZZATI")
+    parti.append("Questa è l'evidenza primaria: in caso di discrepanza con il")
+    parti.append("grafo qui sopra, fa fede il codice.")
+    parti.append("=" * 70 + "\n")
+
+    usati = 0
+    for nome, contenuto in sorgenti:
+        blocco = f"\n----- FILE: {nome} -----\n{contenuto}\n"
+        if usati + len(blocco) > MAX_CARATTERI_SORGENTI:
+            parti.append(
+                f"\n[...{len(sorgenti)} file totali: il contesto è stato troncato "
+                "per limiti di dimensione. I file non inclusi restano nel grafo...]"
+            )
+            break
+        parti.append(blocco)
+        usati += len(blocco)
+
+    if session_id:
+        log_message(session_id, f"Contesto per gli agenti: grafo + {usati // 1000} KB di codice sorgente.")
+    return "\n".join(parti)
 
 def _genera_report_grafo(G):
     """Trasforma il grafo delle dipendenze in un report testuale ordinato per importanza."""
@@ -272,6 +340,7 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None,
     dipendenze via IA e scrive i log in tempo reale per il frontend.
     """
     G = nx.DiGraph()
+    sorgenti = []  
 
     for root, dirs, files in os.walk(cartella_sorgente):
         dirs[:] = [d for d in dirs if d not in ESCLUDI_CARTELLE]
@@ -287,6 +356,7 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None,
             content = _estrai_contenuto_file(file_path, estensione, session_id)
             if content is None:
                 continue
+            sorgenti.append((relativo, content))
 
             try:
                 log_message(session_id, f"Analisi dipendenze IA per: {file} ...")
@@ -305,4 +375,4 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None,
                 log_message(session_id, f"Errore IA su {file}: {e}")
 
     log_message(session_id, "Calcolo delle dipendenze strutturali completato. Generazione report...")
-    return _genera_report_grafo(G)
+    return _componi_contesto(G, sorgenti, session_id)

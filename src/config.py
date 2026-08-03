@@ -52,6 +52,11 @@ DELAY_TRA_FILE_SEC = float(os.getenv("DELAY_TRA_FILE_SEC", "1"))
 # File di checkpoint per la fase iterativa (permette il resume dopo un crash)
 FILE_IMPL_CHECKPOINT  = "_implementation_checkpoint.json"
 
+# Codice sorgente passato agli agenti della Fase 1 insieme al grafo.
+# Senza, gli agenti documentano solo l'elenco delle dipendenze e non
+# possono citare funzioni, variabili o logica reale.
+MAX_CARATTERI_SORGENTI = 300_000
+
 # File generati automaticamente o senza logica di business: esclusi PRIMA
 # di arrivare al modello, quindi a costo zero. (pattern, motivo mostrato)
 DEFAULT_ESCLUSIONI_PATTERN = [

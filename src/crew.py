@@ -27,6 +27,7 @@ from src.config import (
     DELAY_TRA_FILE_SEC,
     VALIDAZIONE_MAX_CHARS_PER_DOC
 )
+from src.graph_builder import raccogli_sorgenti
 from src.live_log import crea_logger_attivita, log_message
 from src.tasks import (
     get_understanding_tasks,
@@ -231,6 +232,16 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
             documenti_fase1.append(f"### {nome}\n{contenuto}")
     contesto_fase1 = "\n\n".join(documenti_fase1)
 
+    # Evidenza primaria: architetto e DBA devono vedere il codice reale,
+    # non solo la documentazione della fase precedente. Senza, lo schema
+    # database nasce da una descrizione invece che dalle query vere.
+    cartella_sorgenti = os.path.join(output_dir, "sorgenti_originali")
+    contesto_sorgenti = ""
+    if os.path.isdir(cartella_sorgenti):
+        contesto_sorgenti = raccogli_sorgenti(cartella_sorgenti)
+    if not contesto_sorgenti:
+        contesto_sorgenti = "Codice sorgente non disponibile in questa sessione."
+        
     agents = create_agents(llm)
     tasks = get_design_tasks(agents, output_dir, contesto_fase1=contesto_fase1)
     annuncia_avvio, task_callback = crea_logger_attivita(
@@ -257,6 +268,7 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
     risultato = crew.kickoff(inputs={
         "linguaggio_target": linguaggio_target,
         "contesto_fase1": contesto_fase1 or "Nessun documento di Fase 1 disponibile.",
+        "contesto_sorgenti": contesto_sorgenti,
     })
     _salva_output_su_disco(tasks, output_dir)
     if tracker is not None:
