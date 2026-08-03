@@ -231,15 +231,26 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             + MERMAID_RULES
             + blocco_contesto
         )+ _nota_data(),
-        expected_output=(
+     expected_output=(
             "Un documento in formato Markdown che include il Migration Plan completo "
             "e l'elenco formale degli ADR (Architectural Decision Records) per "
-            "guidare lo sviluppo."
+            "guidare lo sviluppo. "
+            "VINCOLO DI PROPORZIONE: il documento deve essere proporzionato alla "
+            "dimensione reale del sistema analizzato. Non includere procedure "
+            "standard di project management indipendenti da questo specifico "
+            "sistema (creazione repository, strategia di branching, setup "
+            "dell'ambiente di sviluppo, struttura generica delle cartelle, "
+            "processi di rilascio): il cliente le conosce già e non le sta "
+            "pagando. Concentrati esclusivamente su ciò che è SPECIFICO di "
+            "questo sistema legacy: come si traduce ogni componente esistente, "
+            "quali decisioni architetturali richiede il codice che hai letto, "
+            "quali rischi di migrazione presenta. "
             "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO: non annunciare nell'indice sezioni che non "
-            "svilupperai, e concludi il testo prima di esaurire lo spazio "
-            "disponibile. Meglio 6 sezioni complete che 13 dichiarate e troncate. "
-            "Non inserire rinvii a sezioni che non esistono nel documento."
+            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
+            "sezioni che non svilupperai, non inserire rinvii a sezioni "
+            "inesistenti, e concludi il testo prima di esaurire lo spazio. "
+            "Meglio 5 sezioni piene di contenuto specifico che 8 riempite di "
+            "prassi generiche."
         ),
         agent=agents["cloud_solutions_architect"],
         output_file=f"{output_dir}/{FILE_MIGRATION_PLAN}",
@@ -260,6 +271,13 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "IMPORTANTE: l'output deve essere SOLO SQL valido (con commenti `--` "
             "dove serve), senza testo Markdown attorno, perché verrà salvato come "
             "file .sql eseguibile."
+            "VINCOLO DI ADERENZA: progetta lo schema SOLO sulla base della "
+            "persistenza REALMENTE presente nel sistema legacy (tabelle, file "
+            "di dati, configurazioni salvate). Se il sistema analizzato non "
+            "utilizza un database, dichiaralo esplicitamente e limita il "
+            "documento a quella constatazione, eventualmente suggerendo se e "
+            "quale persistenza avrebbe senso introdurre — senza però produrre "
+            "uno schema completo non richiesto dal sistema esistente."
             "\n\nCODICE SORGENTE LEGACY (evidenza primaria):\n"
             "In caso di discrepanza tra la documentazione della fase precedente "
             "e il codice, fa fede il codice. Non attribuire al sistema componenti, "
