@@ -74,7 +74,7 @@ class TokenUsageTracker:
     def aggiungi_crew(self, crew, risultato=None):
         da_risultato = getattr(risultato, "token_usage", None)
         da_crew = getattr(crew, "usage_metrics", None)
-        logger.info(
+        logger.debug(
             "METRICHE | da_risultato=%s | da_crew=%s | accumulato_prima=(p=%d c=%d t=%d)",
             da_risultato, da_crew,
             self.prompt_tokens, self.completion_tokens, self._totale_dichiarato,
