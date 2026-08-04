@@ -26,7 +26,7 @@ from auth import _parse_expiry, get_current_user, get_current_user_and_validate_
 from payments import addebita_consumo_token, verifica_credito_token
 from payments import router as payments_router
 from src.code_unpacker import unpack_markdown_to_files
-from src.config import FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, WORKSPACE_DIR
+from src.config import FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_SELEZIONE, WORKSPACE_DIR
 from src.crew import run_understanding_phase, run_design_phase, run_implementation_phase
 from src.graph_builder import (
     ESTENSIONI_VALIDE,
@@ -177,6 +177,7 @@ FILE_ESCLUSI_DALLO_ZIP = {
     "live_logs.txt",                  # log live: serve al terminale del frontend, non al deliverable
     "solution_upload.zip",            # copia dello zip caricato dall'utente: ce l'ha già
     "_implementation_checkpoint.json" # stato interno del resume della Fase 3
+    "_file_selezionati.json"          # lista file selezionati dall'utente in fase di upload
 }
 
 def _crea_zip_fase(percorso_base_senza_estensione, cartella_sessione, escludi_cartelle=()):
@@ -503,6 +504,14 @@ def fase1_understand(
         except Exception:
             raise HTTPException(status_code=400, detail="Elenco dei file selezionati non valido.")
 
+    # Persisti la selezione: serve anche alla Fase 3, che gira giorni dopo
+    if ammessi:
+        try:
+            with open(cartella_output / FILE_SELEZIONE, "w", encoding="utf-8") as f:
+                json.dump(ammessi, f)
+        except Exception as e:
+            logger.warning("Selezione file non salvata per %s: %s", session_id, e)
+
     # IMPORTANTE: il file caricato va salvato ORA. Dopo la risposta HTTP
     # lo stream di UploadFile viene chiuso e il background non lo vedrebbe più.
     ha_file = file is not None
@@ -525,6 +534,7 @@ def fase1_understand(
         }).execute()
     except Exception as e:
         logger.error("Registrazione sessione fallita: %s", e)
+
 
     _imposta_stato_esecuzione(session_id, "running", fase="fase1")
     log_message(session_id, "⚡ Ricezione completata: elaborazione avviata sul server.")
@@ -697,7 +707,7 @@ def fase2_design(
 # FASE 3: IMPLEMENTATION (dopo il Checkpoint 2)
 # =====================================================================
 
-def _carica_file_legacy(cartella_sorgenti: Path):
+def _carica_file_legacy(cartella_sorgenti: Path,file_ammessi=None):
     """
     Raccoglie i file legacy da migrare riusando la STESSA strategia di
     estrazione della Fase 1: parser nativi per .scx/.dbf e filtro sulle
@@ -716,6 +726,12 @@ def _carica_file_legacy(cartella_sorgenti: Path):
                 continue
 
             file_path = os.path.join(root, file_name)
+            # Rispetta la selezione dell'utente: il percorso deve essere
+            # calcolato come in Fase 1 (relativo a sorgenti_originali, slash
+            # normalizzati), altrimenti il confronto non combacia mai.
+            relativo = os.path.relpath(file_path, cartella_sorgenti).replace("\\", "/")
+            if file_ammessi is not None and relativo not in file_ammessi:
+                continue
             try:
                 if estensione == ".scx":
                     contenuto = extract_foxpro_scx_code(file_path)
@@ -746,7 +762,19 @@ def _lavoro_fase3(session_id, user_id, provider_llm, modello_llm,
 
         llm = get_llm(provider=provider_llm, model_name=modello_llm)
 
-        lista_file_legacy = _carica_file_legacy(cartella_sorgenti)
+        # Rispetta la selezione fatta dall'utente in Fase 1: i file che aveva
+        # escluso non vanno migrati (e non vanno pagati).
+        ammessi_fase3 = None
+        percorso_sel = cartella_output / FILE_SELEZIONE
+        if percorso_sel.exists():
+            try:
+                with open(percorso_sel, "r", encoding="utf-8") as f:
+                    ammessi_fase3 = set(json.load(f))
+                log_message(session_id, f"🎯 Migrazione limitata ai {len(ammessi_fase3)} file selezionati in Fase 1.")
+            except Exception as e:
+                logger.warning("Selezione file non leggibile per %s: %s", session_id, e)
+
+        lista_file_legacy = _carica_file_legacy(cartella_sorgenti, file_ammessi=ammessi_fase3)
         if not lista_file_legacy:
             lista_file_legacy = [{"nome": "pasted_code.txt", "codice": "Nessun codice trovato."}]
 

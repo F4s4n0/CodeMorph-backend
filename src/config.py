@@ -52,6 +52,11 @@ DELAY_TRA_FILE_SEC = float(os.getenv("DELAY_TRA_FILE_SEC", "1"))
 # File di checkpoint per la fase iterativa (permette il resume dopo un crash)
 FILE_IMPL_CHECKPOINT  = "_implementation_checkpoint.json"
 
+# Selezione dei file scelta dall'utente in fase di upload. Vive nella cartella
+# di sessione così viene ripristinata insieme al resto dopo un riavvio, e vale
+# per TUTTE le fasi: senza, la Fase 3 migrerebbe anche i file esclusi.
+FILE_SELEZIONE = "_file_selezionati.json"
+
 # Codice sorgente passato agli agenti della Fase 1 insieme al grafo.
 # Senza, gli agenti documentano solo l'elenco delle dipendenze e non
 # possono citare funzioni, variabili o logica reale.

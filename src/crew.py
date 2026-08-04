@@ -10,6 +10,7 @@ from src.agents import create_agents
 from src.config import (
     FILE_ASSESSMENT,
     FILE_DEPENDENCY_MAP,
+    FILE_SELEZIONE,
     FILE_TECH_DOC,
     FILE_FUNCTIONAL_DOC,
     FILE_DB_SCHEMA,
@@ -238,7 +239,17 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
     cartella_sorgenti = os.path.join(output_dir, "sorgenti_originali")
     contesto_sorgenti = ""
     if os.path.isdir(cartella_sorgenti):
-        contesto_sorgenti = raccogli_sorgenti(cartella_sorgenti)
+        # Rispetta la selezione fatta in Fase 1: i file esclusi dall'utente
+        # non devono rientrare dalla finestra e tornare a costare token.
+        ammessi = None
+        percorso_sel = os.path.join(output_dir, FILE_SELEZIONE)
+        if os.path.exists(percorso_sel):
+            try:
+                with open(percorso_sel, "r", encoding="utf-8") as f:
+                    ammessi = set(json.load(f))
+            except Exception:
+                logger.warning("Selezione file non leggibile: passo tutti i sorgenti.")
+        contesto_sorgenti = raccogli_sorgenti(cartella_sorgenti, file_ammessi=ammessi)
     if not contesto_sorgenti:
         contesto_sorgenti = "Codice sorgente non disponibile in questa sessione."
         
