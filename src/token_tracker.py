@@ -21,9 +21,24 @@ _PRECISIONE_EUR = Decimal("0.0001")
 
 
 def listino_modello(modello):
-    """Voce di listino per il modello (senza prefisso provider), o 'default'."""
+    """
+    Voce di listino per il modello, cercata dentro TUTTI i provider.
+    Il dizionario è annidato (provider -> modello -> prezzi): cercare la
+    chiave al primo livello faceva ricadere ogni modello sul 'default',
+    fatturando tutto alla tariffa più alta.
+    """
     chiave = (modello or "").split("/")[-1].strip().lower()
-    return PREZZI_TOKEN_EUR_PER_1M.get(chiave, PREZZI_TOKEN_EUR_PER_1M["default"])
+    for nome_provider, modelli in PREZZI_TOKEN_EUR_PER_1M.items():
+        if nome_provider == "default" or not isinstance(modelli, dict):
+            continue
+        # I listini dei provider hanno i modelli come chiavi
+        if "prompt" in modelli:      # è la voce 'default', non un provider
+            continue
+        for nome_modello, prezzi in modelli.items():
+            if nome_modello.lower() == chiave:
+                return prezzi
+    logger.warning("Modello '%s' non a listino: applico la tariffa di default.", modello)
+    return PREZZI_TOKEN_EUR_PER_1M["default"]
 
 
 def _leggi_metrica(metriche, nome):
@@ -57,13 +72,14 @@ class TokenUsageTracker:
         self.richieste += _leggi_metrica(metriche, "successful_requests")
 
     def aggiungi_crew(self, crew, risultato=None):
-        """
-        Registra l'uso di una Crew DOPO il kickoff. Preferisce le metriche
-        del CrewOutput e ripiega su crew.usage_metrics: leggerle entrambe
-        conterebbe gli stessi token due volte.
-        """
-        metriche = getattr(risultato, "token_usage", None) \
-            or getattr(crew, "usage_metrics", None)
+        da_risultato = getattr(risultato, "token_usage", None)
+        da_crew = getattr(crew, "usage_metrics", None)
+        logger.info(
+            "METRICHE | da_risultato=%s | da_crew=%s | accumulato_prima=(p=%d c=%d t=%d)",
+            da_risultato, da_crew,
+            self.prompt_tokens, self.completion_tokens, self._totale_dichiarato,
+        )
+        metriche = da_risultato or da_crew
         self.aggiungi_metriche(metriche)
 
     @property
