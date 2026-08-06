@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from auth import _parse_expiry, get_current_user, supabase
 from payments import _verifica_admin
 from src.agents import create_agents
+from src.config import MODELLO_PREDEFINITO
 from src.llm_config import get_llm
 from zoneinfo import ZoneInfo
 
@@ -32,7 +33,7 @@ MAX_CARATTERI = 10_000  # 50 righe non possono valere 10k caratteri l'una
 # Provider/modello della prova gratuita (a spese della piattaforma).
 # Configurabili da env per cambiarli senza deploy.
 TRIAL_PROVIDER = os.getenv("TRIAL_PROVIDER", "anthropic")
-TRIAL_MODEL = os.getenv("TRIAL_MODEL", "claude-sonnet-4-6")
+TRIAL_MODEL = os.getenv("TRIAL_MODEL", MODELLO_PREDEFINITO)
 
 WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", "/tmp/workspace_sessioni"))
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")

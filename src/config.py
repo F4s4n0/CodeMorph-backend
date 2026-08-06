@@ -178,6 +178,22 @@ PREZZI_TOKEN_EUR_PER_1M = {
     },
 }
 
+def _modello_predefinito():
+    """
+    Sceglie dal listino Anthropic il modello 'sonnet' più recente.
+    Ricavarlo dal listino invece di scriverlo evita il disallineamento:
+    se aggiungi o rinomini un modello, il default segue da solo.
+    """
+    modelli = PREZZI_TOKEN_EUR_PER_1M["anthropic"]
+    candidati = [m for m in modelli if "sonnet" in m]
+    if not candidati:
+        raise RuntimeError("Nessun modello 'sonnet' a listino: controlla PREZZI_TOKEN_EUR_PER_1M.")
+    # Il più recente in ordine alfabetico: sonnet-5 batte sonnet-4.6
+    return sorted(candidati)[-1]
+
+
+MODELLO_PREDEFINITO = _modello_predefinito()
+
 # --- Pass multi-giorno -------------------------------------------------
 # Prezzo per ogni giorno di accesso acquistato; ogni giorno PAGATO include
 # QUOTA_TOKEN_GIORNO_EUR di credito token spendibile (ricaricabile a parte).

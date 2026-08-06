@@ -20,7 +20,7 @@ import logging
 import os
 import re
 
-from src.config import DEFAULT_ESCLUSIONI_PATTERN
+from src.config import DEFAULT_ESCLUSIONI_PATTERN, MODELLO_PREDEFINITO
 from src.llm_config import get_llm
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # Modello usato per la classificazione: legge solo nomi di file, quindi
 # un modello economico è più che sufficiente. Configurabile da env.
 PRESELEZIONE_PROVIDER = os.getenv("PRESELEZIONE_PROVIDER", "anthropic")
-PRESELEZIONE_MODEL = os.getenv("PRESELEZIONE_MODEL", "claude-haiku-4-5-20251001")
+PRESELEZIONE_MODEL = os.getenv("PRESELEZIONE_MODEL", MODELLO_PREDEFINITO)
 
 # Oltre questo numero di file la classificazione LLM viene saltata: la lista
 # sarebbe troppo lunga e i filtri statici hanno già fatto il grosso.
