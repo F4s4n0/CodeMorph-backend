@@ -214,7 +214,7 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
         agents=fase1_agents,
         tasks=tasks,
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
         memory=False,  # Disattivato per evitare errori di fuso orario/database locale
         step_callback=step_con_stop,
         task_callback=task_callback,  # Log live sincronizzato con l'attività reale
@@ -294,7 +294,7 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
         ],
         tasks=tasks,
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
         memory=False,
         step_callback=step_con_stop,
         task_callback=task_callback,  # Log live sincronizzato con l'attività reale
@@ -503,7 +503,7 @@ def run_implementation_phase(
             agents=[agents["security_quality_reviewer"]],
             tasks=qa_tasks,
             process=Process.sequential,
-            verbose=True,
+            verbose=False,
             memory=False,
             step_callback=step_con_stop,
             task_callback=callback_qa,

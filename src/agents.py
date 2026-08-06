@@ -38,7 +38,7 @@ def create_agents(llm):
             "hardware e software iniziale (Inventory)."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
@@ -58,7 +58,7 @@ def create_agents(llm):
             "durante la migrazione."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
@@ -76,7 +76,7 @@ def create_agents(llm):
             "vincoli dei dati operativi."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
@@ -94,7 +94,7 @@ def create_agents(llm):
             "e i comportamenti del vecchio."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
@@ -114,7 +114,7 @@ def create_agents(llm):
             "accettazione (Acceptance Criteria)."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
@@ -134,7 +134,7 @@ def create_agents(llm):
             "strutturate, documentandole formalmente attraverso gli ADR."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
@@ -154,7 +154,7 @@ def create_agents(llm):
             "altissime prestazioni."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
@@ -174,7 +174,7 @@ def create_agents(llm):
             "per accompagnare il codice con una base di test pronta all'uso"
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
@@ -193,7 +193,7 @@ def create_agents(llm):
             "Metti sempre al primo posto l'usabilità (UX)."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
@@ -215,7 +215,7 @@ def create_agents(llm):
             "punteggi o percentuali che richiederebbero l'esecuzione di analizzatori."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
@@ -236,7 +236,7 @@ def create_agents(llm):
             "la sezione interessata, senza mai inventare criticità per sembrare severo."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
     )
 
