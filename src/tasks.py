@@ -116,12 +116,20 @@ def get_understanding_tasks(agents, output_dir):
         ),
         expected_output=(
             "Un documento in Markdown contenente la Technical Documentation "
-            "dettagliata del software originale."
+            "dettagliata del software originale. "
             "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
             "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
             "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
             "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
+            "Meglio 6 sezioni complete che 13 dichiarate e troncate. "
+            "VINCOLO DI PROPORZIONE: documenta ciò che hai effettivamente letto "
+            "nel codice sorgente. NON aggiungere sezioni generiche sui pattern "
+            "architetturali in astratto, glossari di termini informatici comuni, "
+            "o descrizioni di tecnologie non presenti nel sistema. Ogni "
+            "affermazione deve poter essere ricondotta a un file, una funzione o "
+            "una struttura dati esistente. Se un aspetto non è deducibile dal "
+            "codice, dichiaralo come lacuna invece di riempirlo con contenuto "
+            "generico."
         )+ _nota_data(),
         agent=agents["tech_business_documenter"],
         context=[assessment_task, map_dependency_task],
@@ -174,7 +182,16 @@ def get_understanding_tasks(agents, output_dir):
             "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
             "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
             "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
+            "Meglio 6 sezioni complete che 13 dichiarate e troncate. "
+            "VINCOLO DI PROPORZIONE: il piano di test deve essere proporzionato "
+            "al sistema analizzato. NON includere sezioni di metodologia generica "
+            "(cos'è un test di regressione, strategia di test in astratto, "
+            "descrizione di ambienti e strumenti standard, processi di gestione "
+            "dei difetti): il cliente le conosce e non le sta pagando. Ogni caso "
+            "di test deve riferirsi a un comportamento SPECIFICO osservato nel "
+            "codice legacy analizzato, con il nome del modulo o della funzione "
+            "coinvolta. Meglio 15 casi di test verificabili che 60 pagine di "
+            "metodologia."
         )+ _nota_data(),
         agent=agents["qa_test_planner"],
         context=[documentation_task, functional_analysis_task],
@@ -375,7 +392,15 @@ def get_iterative_implementation_tasks(
         """,
         expected_output=(
             f"Il codice sorgente Backend rifattorizzato per il file {nome_file_legacy}, "
-            "completo di unit test, nel formato /// FILEPATH richiesto."
+            "completo di unit test, nel formato /// FILEPATH richiesto. "
+            "VINCOLO DI PROPORZIONE: genera SOLO il codice che traduce questo "
+            "specifico file legacy e i relativi test. NON produrre scaffolding di "
+            "progetto (file di configurazione, Program.cs o entry point generici, "
+            "Dockerfile, pipeline CI/CD, README, file di progetto, struttura di "
+            "cartelle vuote): sono prassi standard che il cliente non sta pagando "
+            "e che verrebbero rigenerate identiche per ogni file. Se il file legacy "
+            "contiene poca logica, produci poco codice: la quantità deve essere "
+            "proporzionata al contenuto reale dell'originale."
         ),
         agent=agents["senior_migration_developer"],
     )
@@ -405,7 +430,16 @@ def get_iterative_implementation_tasks(
         """,
         expected_output=(
             f"Il codice sorgente Frontend moderno (UI) per sostituire {nome_file_legacy}, "
-            "nel formato /// FILEPATH richiesto."
+            "nel formato /// FILEPATH richiesto. "
+            "VINCOLO DI PROPORZIONE: genera SOLO i componenti che sostituiscono "
+            "l'interfaccia di questo specifico file legacy. NON produrre "
+            "boilerplate di progetto (configurazioni del bundler, package.json, "
+            "temi generici, componenti di libreria, routing globale): non fanno "
+            "parte della traduzione di questo file. "
+            "Se il file legacy NON contiene interfaccia utente (moduli di sola "
+            "logica, file di progetto, classi di utility), NON inventare una UI: "
+            "dichiara in una riga che il file non ha componenti di interfaccia "
+            "e concludi."
         ),
         agent=agents["frontend_developer"],
         context=[backend_task],
