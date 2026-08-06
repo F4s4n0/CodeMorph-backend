@@ -403,7 +403,7 @@ def stato_esecuzione(session_id: str, user_id: str = Depends(get_current_user)):
             if aggiornato:
                 minuti = int((datetime.now(timezone.utc) - aggiornato).total_seconds() // 60)
                 dati["fermo_da_minuti"] = minuti
-                dati["possibile_blocco"] = minuti >= 60
+                dati["possibile_blocco"] = minuti >= 20
         except Exception:
             # Il calcolo è un di più: se il formato della data non si legge,
             # lo stato viene restituito comunque senza segnalazione.
