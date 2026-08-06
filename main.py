@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from contacts import router as contacts_router
 
 from auth import _parse_expiry, get_current_user, get_current_user_and_validate_license, supabase
-from payments import addebita_consumo_token, verifica_credito_token
+from payments import addebita_consumo_token, addebita_importo_token, verifica_credito_token
 from payments import router as payments_router
 from src.code_unpacker import unpack_markdown_to_files
 from src.config import FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_SELEZIONE, WORKSPACE_DIR
@@ -76,6 +76,66 @@ app.include_router(trial_router)
 
 # EndPoint Contatti
 app.include_router(contacts_router)
+
+
+@app.on_event("startup")
+def _sblocca_sessioni_orfane():
+    """
+    Al riavvio del server i BackgroundTasks del processo precedente sono
+    morti: le sessioni rimaste 'running' non arriveranno mai a 'completata'.
+
+    Qui vengono chiuse e — punto importante — viene ADDEBITATO il consumo
+    parziale salvato da crew.py durante l'elaborazione. Senza, i token già
+    fatturati da Anthropic resterebbero a carico della piattaforma.
+
+    L'addebito è idempotente: il parziale viene azzerato contestualmente,
+    così un secondo riavvio non lo conta due volte.
+    """
+    try:
+        r = (supabase.table("migration_sessions")
+             .select("id,user_id,costo_parziale_eur,token_parziali,fase_in_corso")
+             .eq("stato_esecuzione", "running").execute())
+    except Exception as e:
+        logger.error("Sblocco sessioni orfane: lettura fallita: %s", e)
+        return
+
+    for riga in (r.data or []):
+        session_id = riga["id"]
+        costo = float(riga.get("costo_parziale_eur") or 0)
+        tokens = int(riga.get("token_parziali") or 0)
+
+        # 1. Addebito del consumo maturato prima del riavvio
+        if costo > 0 and riga.get("user_id"):
+            try:
+                addebita_importo_token(
+                    riga["user_id"], costo, tokens=tokens, session_id=session_id,
+                    descrizione="Consumo parziale: elaborazione interrotta da un riavvio del server",
+                )
+                logger.warning(
+                    "Sessione orfana %s: addebitati %.4f EUR (%d token).",
+                    session_id, costo, tokens,
+                )
+            except Exception as e:
+                logger.error("Addebito parziale fallito per %s: %s", session_id, e)
+
+        # 2. Chiusura della sessione e azzeramento del parziale (idempotenza)
+        try:
+            supabase.table("migration_sessions").update({
+                "stato_esecuzione": "errore",
+                "errore_messaggio": (
+                    "Elaborazione interrotta da un riavvio del server. "
+                    "I token consumati fino a quel momento sono stati addebitati: "
+                    "puoi rilanciare la fase."
+                ),
+                "token_parziali": 0,
+                "costo_parziale_eur": 0,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", session_id).execute()
+            log_message(session_id, "❌ Elaborazione interrotta da un riavvio del server: rilancia la fase.")
+        except Exception as e:
+            logger.error("Chiusura sessione orfana %s fallita: %s", session_id, e)
+
+
 # =====================================================================
 # Modelli di input
 # =====================================================================

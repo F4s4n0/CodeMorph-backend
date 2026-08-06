@@ -3,7 +3,7 @@ import logging
 import os
 import interruzione
 
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 from crewai import Crew, Process
 from src.agents import create_agents
@@ -39,6 +39,30 @@ from src.tasks import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _salva_consumo_parziale(session_id, tracker):
+    """
+    Scrive su DB il consumo accumulato FINORA, dopo ogni crew completata.
+
+    Serve a non perdere i token già bruciati se il server viene riavviato a
+    metà fase: il tracker vive in memoria e morirebbe con il processo, mentre
+    Anthropic ha comunque fatturato quelle chiamate. All'avvio successivo il
+    parziale viene addebitato al cliente invece di restare a carico nostro.
+
+    Best-effort: un errore qui non deve mai fermare la pipeline.
+    """
+    if not session_id or tracker is None:
+        return
+    try:
+        from auth import supabase          # import locale: evita cicli
+        supabase.table("migration_sessions").update({
+            "token_parziali": int(tracker.tokens_totali),
+            "costo_parziale_eur": float(tracker.costo_eur()),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", session_id).execute()
+    except Exception as e:
+        logger.warning("Consumo parziale non salvato per %s: %s", session_id, e)
 
 
 # =====================================================================
@@ -202,6 +226,7 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
     _salva_output_su_disco(tasks, output_dir)
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
+        _salva_consumo_parziale(session_id, tracker)
     if quality_gate:
         _valida_fase(
             llm, output_dir, "Fase 1 · Understanding",
@@ -284,6 +309,7 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
     _salva_output_su_disco(tasks, output_dir)
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
+        _salva_consumo_parziale(session_id, tracker)
     if quality_gate:
         _valida_fase(
             llm, output_dir, "Fase 2 · Design",
@@ -400,6 +426,7 @@ def run_implementation_phase(
             dev_crew.kickoff()
             if tracker is not None:
                 tracker.aggiungi_crew(dev_crew)
+                _salva_consumo_parziale(session_id, tracker)
 
             # Accesso NOMINATO agli output: niente più tasks[0]/tasks[1]
             output_backend = _task_output_text(impl_tasks.backend)
@@ -488,6 +515,7 @@ def run_implementation_phase(
             _salva_output_su_disco(qa_tasks, output_dir)
             if tracker is not None:
                 tracker.aggiungi_crew(qa_crew, risultato)
+                _salva_consumo_parziale(session_id, tracker)
             report_qa.append(getattr(risultato, "raw", None) or str(risultato))
         except Exception:
             logger.exception("Errore durante il Quality Check (%s).", etichetta or "unico")
@@ -574,6 +602,7 @@ def _valida_fase(llm, output_dir, nome_fase, file_da_validare, nome_report,
         _salva_output_su_disco(tasks, output_dir)
         if tracker is not None:
             tracker.aggiungi_crew(crew, risultato)
+            _salva_consumo_parziale(session_id, tracker)
 
         report = _pulisci_output(getattr(risultato, "raw", None) or str(risultato))
         prima_riga = report.strip().splitlines()[0] if report.strip() else ""

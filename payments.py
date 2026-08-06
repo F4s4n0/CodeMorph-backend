@@ -444,6 +444,55 @@ def addebita_consumo_token(user_id, tracker, session_id=None):
     return costo, saldo
 
 
+def addebita_importo_token(user_id, costo_eur, tokens=0, session_id=None,
+                           modello="", descrizione="Consumo token"):
+    """
+    Addebita un importo GIÀ CALCOLATO, senza passare da un tracker.
+
+    Serve al recupero delle sessioni orfane: dopo un riavvio del server il
+    tracker (che vive in memoria) non esiste più, ma il consumo maturato è
+    stato salvato su migration_sessions da crew.py. Senza questa funzione
+    quei token — già fatturati dal provider — resterebbero a carico della
+    piattaforma invece che del cliente.
+
+    Ritorna (costo, saldo_dopo); saldo_dopo è None se l'addebito fallisce.
+    """
+    # Stesso trattamento di addebita_consumo_token: l'admin non paga
+    try:
+        utente = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
+        if utente.data and utente.data.get("role") == "admin":
+            return Decimal("0.00"), Decimal("9999.00")
+    except Exception:
+        pass
+
+    costo = Decimal(str(costo_eur or 0)).quantize(Decimal("0.0001"))
+    if costo <= 0:
+        return Decimal("0"), None
+
+    try:
+        saldo = _modifica_saldo(user_id, -costo)
+    except Exception as e:
+        logger.error("Addebito parziale non riuscito (%s €) per %s: %s", costo, user_id, e)
+        return costo, None
+
+    riga = {
+        "user_id": user_id,
+        "tipo": "consumo",
+        "importo_eur": float(-costo),
+        "descrizione": descrizione,
+        "session_id": session_id,
+        "tokens_totali": int(tokens or 0),
+    }
+    if modello:
+        riga["modello"] = modello
+    try:
+        supabase.table("token_transactions").insert(riga).execute()
+    except Exception as e:
+        logger.warning("Movimento token parziale non registrato: %s", e)
+
+    return costo, saldo
+
+
 # =====================================================================
 # Licenze (pass giornaliero)
 # =====================================================================
