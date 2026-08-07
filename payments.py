@@ -45,6 +45,7 @@ from pydantic import BaseModel
 from auth import _parse_expiry, get_current_user, supabase
 from src.config import (
     DURATA_PASS_ORE,
+    PREZZI_TOKEN_EUR_PER_1M,
     PREZZO_PASS_GIORNALIERO_EUR,
     QUOTA_TOKEN_PASS_EUR,
     RICARICA_MASSIMA_EUR,
@@ -1045,6 +1046,30 @@ def cattura_pagamento(richiesta: InputCattura, user_id: str = Depends(get_curren
             ),
         )
 
+@router.get("/tokens/listino")
+def listino_pubblico():
+    """
+    Listino di vendita dei token, per modello. Endpoint PUBBLICO: il prezzo
+    deve essere consultabile anche prima di registrarsi.
+
+    I prezzi arrivano da config.py, quindi aggiornarli lì aggiorna anche
+    quello che vede il cliente: nessun rischio di listino disallineato.
+    """
+    voci = []
+    for provider, modelli in PREZZI_TOKEN_EUR_PER_1M.items():
+        if provider == "default" or not isinstance(modelli, dict):
+            continue
+        if "prompt" in modelli:          # è la voce 'default', non un provider
+            continue
+        for nome, prezzi in modelli.items():
+            voci.append({
+                "provider": provider,
+                "modello": nome,
+                "prompt_eur_per_1m": float(prezzi["prompt"]),
+                "completion_eur_per_1m": float(prezzi["completion"]),
+            })
+    voci.sort(key=lambda v: (v["provider"], v["prompt_eur_per_1m"]))
+    return {"valuta": VALUTA_PAGAMENTI, "voci": voci}
 
 def _leggi_profilo_fatturazione(user_id):
     """Ritorna il profilo di fatturazione dell'utente, o None se assente."""
