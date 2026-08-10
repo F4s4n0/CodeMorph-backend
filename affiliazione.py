@@ -233,14 +233,18 @@ def cambia_stato_agente(agente_id: str, attivo: bool, user_id: str = Depends(get
 
 @router.get("/admin/agenti")
 def elenco_agenti(user_id: str = Depends(get_current_user)):
-    """[ADMIN] Agenti con il riepilogo dei compensi maturati e liquidati."""
+    """[ADMIN] Agenti con clienti attribuiti e riepilogo compensi."""
     _verifica_admin(user_id)
     agenti = supabase.table("agenti").select("*").order("nome").execute().data or []
-    prov = supabase.table("provvigioni").select("agente_id,importo_eur,stato").execute().data or []
+    prov = supabase.table("provvigioni").select("agente_id,user_id,importo_eur,stato").execute().data or []
+    # I clienti attribuiti si contano dai PROFILI: un cliente è attribuito
+    # dalla registrazione, anche se non ha ancora acquistato nulla.
+    profili = supabase.table("profiles").select("agente_id").not_.is_("agente_id", "null").execute().data or []
 
     for ag in agenti:
         mie = [p for p in prov if p["agente_id"] == ag["id"]]
-        ag["clienti_attribuiti"] = len({p.get("user_id") for p in mie})
+        ag["clienti_attribuiti"] = sum(1 for p in profili if p["agente_id"] == ag["id"])
+        ag["clienti_paganti"] = len({p["user_id"] for p in mie})
         ag["maturato_eur"] = round(sum(float(p["importo_eur"]) for p in mie if p["stato"] == "maturata"), 2)
         ag["liquidato_eur"] = round(sum(float(p["importo_eur"]) for p in mie if p["stato"] == "liquidata"), 2)
     return agenti
