@@ -115,11 +115,20 @@ class InputAgente(BaseModel):
     note: str = ""
 
 
-def _codice_da_nome(nome):
-    """Codice leggibile ricavato dal nome: 'Mario Rossi' -> 'MarioRossi'."""
-    pulito = re.sub(r"[^A-Za-z0-9]", "", (nome or "").title())
-    return pulito[:24] or "Agente"
-
+def _genera_codice(nome):
+    """
+    Codice univoco per il link di segnalazione: base leggibile ricavata dal
+    nome più un suffisso casuale. Il suffisso evita le omonimie (due Mario
+    Rossi) senza rendere il codice illeggibile.
+    """
+    import secrets
+    base = re.sub(r"[^A-Za-z0-9]", "", (nome or "").title())[:16] or "Agente"
+    for _ in range(10):
+        codice = f"{base}-{secrets.token_hex(2).upper()}"      # es. MarioRossi-7F3A
+        esistente = supabase.table("agenti").select("id").eq("codice", codice).execute()
+        if not esistente.data:
+            return codice
+    raise HTTPException(status_code=500, detail="Generazione del codice non riuscita: riprova.")
 
 @router.post("/admin/agenti")
 def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
@@ -140,7 +149,7 @@ def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
     if not (0 < dati.percentuale <= 100):
         raise HTTPException(status_code=400, detail="La percentuale deve essere tra 0 e 100.")
 
-    codice = (dati.codice or "").strip() or _codice_da_nome(nome)
+    codice = _genera_codice(nome)
     if not re.fullmatch(r"[A-Za-z0-9_-]{3,32}", codice):
         raise HTTPException(
             status_code=400,
