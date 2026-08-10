@@ -103,6 +103,87 @@ def registra_provvigione(user_id, order_id, importo_ordine_eur):
         logger.warning("Provvigione non registrata per l'ordine %s: %s", order_id, e)
         return None
 
+import re
+
+
+class InputAgente(BaseModel):
+    nome: str
+    email: str
+    codice: str = ""              # se vuoto viene generato dal nome
+    percentuale: float = 30.0
+    partita_iva: str = ""
+    note: str = ""
+
+
+def _codice_da_nome(nome):
+    """Codice leggibile ricavato dal nome: 'Mario Rossi' -> 'MarioRossi'."""
+    pulito = re.sub(r"[^A-Za-z0-9]", "", (nome or "").title())
+    return pulito[:24] or "Agente"
+
+
+@router.post("/admin/agenti")
+def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Registra un nuovo agente dopo la firma del contratto.
+    Il codice è la chiave del link di segnalazione: deve essere unico,
+    leggibile e stabile nel tempo (cambiarlo invaliderebbe i link già
+    distribuiti).
+    """
+    _verifica_admin(user_id)
+
+    nome = (dati.nome or "").strip()
+    email = (dati.email or "").strip().lower()
+    if len(nome) < 3:
+        raise HTTPException(status_code=400, detail="Indica il nome completo dell'agente.")
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Indirizzo email non valido.")
+    if not (0 < dati.percentuale <= 100):
+        raise HTTPException(status_code=400, detail="La percentuale deve essere tra 0 e 100.")
+
+    codice = (dati.codice or "").strip() or _codice_da_nome(nome)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{3,32}", codice):
+        raise HTTPException(
+            status_code=400,
+            detail="Il codice può contenere solo lettere, numeri, trattini e underscore (3-32 caratteri).",
+        )
+
+    try:
+        esistente = supabase.table("agenti").select("id").eq("codice", codice).execute()
+        if esistente.data:
+            raise HTTPException(status_code=400, detail=f"Il codice '{codice}' è già assegnato a un altro agente.")
+
+        r = supabase.table("agenti").insert({
+            "codice": codice,
+            "nome": nome,
+            "email": email,
+            "percentuale": float(dati.percentuale),
+            "partita_iva": (dati.partita_iva or "").strip() or None,
+            "note": (dati.note or "").strip() or None,
+            "attivo": True,
+        }).execute()
+        logger.info("Agente '%s' creato con codice %s.", nome, codice)
+        return r.data[0] if r.data else {"codice": codice}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Creazione agente fallita: %s", e)
+        raise HTTPException(status_code=500, detail="Creazione non riuscita.")
+
+
+@router.post("/admin/agenti/{agente_id}/stato")
+def cambia_stato_agente(agente_id: str, attivo: bool, user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Attiva o disattiva un agente.
+
+    Disattivare NON toglie i clienti già attribuiti né le provvigioni
+    maturate: impedisce solo nuove attribuzioni con quel codice e blocca
+    la maturazione di nuovi compensi.
+    """
+    _verifica_admin(user_id)
+    r = supabase.table("agenti").update({"attivo": attivo}).eq("id", agente_id).execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail="Agente non trovato.")
+    return {"status": "aggiornato", "attivo": attivo}
 
 @router.get("/admin/agenti")
 def elenco_agenti(user_id: str = Depends(get_current_user)):
