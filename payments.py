@@ -552,8 +552,21 @@ def _eroga_acquisto(user_id, ordine_db, order_id) -> dict:
     NON gestisce le transizioni di stato: il chiamante deve aver già vinto la
     transizione condizionata (creato/in_attesa_bonifico -> completato).
     """
+    def _provvigione():
+        """
+        Compenso all'agente che ha segnalato il cliente, se esiste.
+        Solo sui PASS: le ricariche token sono riaddebito di costi di terzi,
+        con margine minimo, e una provvigione su quelle sarebbe in perdita.
+        """
+        try:
+            from affiliazione import registra_provvigione
+            registra_provvigione(user_id, order_id, float(ordine_db["importo_eur"]))
+        except Exception as e:
+            logger.warning("Provvigione non registrata per l'ordine %s: %s", order_id, e)
+
     if ordine_db["tipo"] == "pass_giornaliero":
         scadenza = _attiva_pass_giornaliero(user_id)
+        _provvigione()
         saldo = _modifica_saldo(user_id, QUOTA_TOKEN_PASS_EUR)
         _inserisci_movimento(
             user_id, "accredito_pass", QUOTA_TOKEN_PASS_EUR,
@@ -579,6 +592,7 @@ def _eroga_acquisto(user_id, ordine_db, order_id) -> dict:
 
         giorni_totali = giorni_pagati + giorni_bonus
         scadenza = _attiva_pass(user_id, ore_totali=giorni_totali * 24)
+        _provvigione()
 
         quota_token = (QUOTA_TOKEN_GIORNO_EUR * giorni_pagati).quantize(_DUE_DECIMALI)
         saldo = _modifica_saldo(user_id, quota_token)
@@ -600,7 +614,6 @@ def _eroga_acquisto(user_id, ordine_db, order_id) -> dict:
             "token_accreditati_eur": float(quota_token),
             "saldo_token_eur": float(saldo),
         }
-
     # ricarica_token
     importo = _dec(ordine_db["importo_eur"])
     saldo = _modifica_saldo(user_id, importo)

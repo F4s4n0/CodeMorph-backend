@@ -110,6 +110,15 @@ MERMAID_RULES = (
     "- Usa i trattini bassi per gli ID (es. logica_business_hardcoded).\n"
     "- Racchiudi il testo descrittivo tra virgolette dentro parentesi quadre, "
     'es.: subgraph logica_business_hardcoded ["Logica di Business Cablata (Hardcoded)"].\n'
+    "- Se i nodi sono più di 15, RAGGRUPPALI in subgraph tematici "
+    "(presentazione, logica applicativa, accesso ai dati, sistemi esterni) "
+    "invece di metterli tutti allo stesso livello: un diagramma che si allarga "
+    "per centinaia di pixel a ogni nodo è illeggibile.\n"
+    "- Preferisci `graph LR` (sinistra-destra) quando i nodi sono molti: "
+    "produce un layout più compatto e leggibile su schermo.\n"
+    "- Se il sistema ha molte componenti, meglio PIÙ diagrammi tematici "
+    "(uno per area) che un unico diagramma con tutto: ogni diagramma deve "
+    "restare leggibile a schermo intero senza zoom.\n"
 )
 
 # --- Limiti operativi ---

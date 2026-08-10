@@ -8,7 +8,7 @@ import interruzione
 import json
 from src.preparazione import analizza_sorgenti
 from src.graph_builder import ESCLUDI_CARTELLE, ESTENSIONI_VALIDE, MAX_FILE_SIZE
-
+from affiliazione import router as affiliazione_router
 
 
 from pathlib import Path
@@ -77,6 +77,8 @@ app.include_router(trial_router)
 # EndPoint Contatti
 app.include_router(contacts_router)
 
+#Affiliazione
+app.include_router(affiliazione_router)
 
 @app.on_event("startup")
 def _sblocca_sessioni_orfane():
