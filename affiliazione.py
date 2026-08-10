@@ -130,6 +130,43 @@ def _genera_codice(nome):
             return codice
     raise HTTPException(status_code=500, detail="Generazione del codice non riuscita: riprova.")
 
+@router.delete("/admin/agenti/{agente_id}")
+def elimina_agente(agente_id: str, user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Elimina un agente, solo se non ha clienti attribuiti né
+    provvigioni.
+
+    Un agente che ha prodotto qualcosa NON va cancellato: le provvigioni
+    sono documenti contabili e i clienti resterebbero orfani di
+    attribuzione. In quel caso si usa la disattivazione.
+    """
+    _verifica_admin(user_id)
+
+    try:
+        prov = supabase.table("provvigioni").select("id").eq("agente_id", agente_id).limit(1).execute()
+        if prov.data:
+            raise HTTPException(
+                status_code=400,
+                detail="L'agente ha provvigioni registrate e non può essere eliminato: disattivalo.",
+            )
+        clienti = supabase.table("profiles").select("id").eq("agente_id", agente_id).limit(1).execute()
+        if clienti.data:
+            raise HTTPException(
+                status_code=400,
+                detail="L'agente ha clienti attribuiti e non può essere eliminato: disattivalo.",
+            )
+
+        r = supabase.table("agenti").delete().eq("id", agente_id).execute()
+        if not r.data:
+            raise HTTPException(status_code=404, detail="Agente non trovato.")
+        logger.info("Agente %s eliminato (nessun cliente, nessuna provvigione).", agente_id)
+        return {"status": "eliminato"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Eliminazione agente %s fallita: %s", agente_id, e)
+        raise HTTPException(status_code=500, detail="Eliminazione non riuscita.")
+
 @router.post("/admin/agenti")
 def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
     """
