@@ -283,6 +283,101 @@ def elenco_agenti(user_id: str = Depends(get_current_user)):
     return agenti
 
 
+def _mappa_email_utenti():
+    """
+    id -> (email, data_registrazione) dagli utenti Auth.
+
+    L'email potrebbe non essere replicata in profiles: in quel caso l'unica
+    fonte e' auth.users, raggiungibile solo con la service role. Se la
+    chiamata non e' disponibile si degrada a un dizionario vuoto: il
+    dettaglio mostrera' l'id al posto dell'indirizzo, senza rompersi.
+    """
+    try:
+        risposta = supabase.auth.admin.list_users(page=1, per_page=1000)
+        utenti = getattr(risposta, "users", risposta) or []
+        mappa = {}
+        for u in utenti:
+            uid = getattr(u, "id", None) or (u.get("id") if isinstance(u, dict) else None)
+            if not uid:
+                continue
+            email = getattr(u, "email", None) or (u.get("email") if isinstance(u, dict) else None)
+            creato = getattr(u, "created_at", None) or (u.get("created_at") if isinstance(u, dict) else None)
+            mappa[str(uid)] = (email, str(creato) if creato else None)
+        return mappa
+    except Exception as e:
+        logger.warning("Elenco utenti Auth non disponibile: %s: %s", type(e).__name__, e)
+        return {}
+
+
+@router.get("/admin/agenti/{agente_id}/clienti")
+def clienti_agente(agente_id: str, user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] I singoli clienti attribuiti a un agente, con quanto hanno
+    acquistato e quanto manca alla scadenza della finestra provvigionabile.
+
+    La finestra parte da agente_attribuito_at: e' quella la data che conta
+    per il compenso, non la registrazione dell'account.
+    """
+    _verifica_admin(user_id)
+
+    try:
+        profili = (supabase.table("profiles").select("*")
+                   .eq("agente_id", agente_id).execute().data or [])
+        if not profili:
+            return []
+
+        ids = [str(p["id"]) for p in profili]
+        prov = (supabase.table("provvigioni")
+                .select("user_id,importo_ordine_eur,importo_eur,stato,created_at")
+                .eq("agente_id", agente_id).execute().data or [])
+
+        # L'email sta in profiles solo se e' stata replicata li': altrimenti
+        # si interroga Auth una volta sola per tutti i clienti.
+        serve_auth = any(not p.get("email") for p in profili)
+        da_auth = _mappa_email_utenti() if serve_auth else {}
+
+        adesso = datetime.now(timezone.utc)
+        clienti = []
+        for p in profili:
+            pid = str(p["id"])
+            email_auth, creato_auth = da_auth.get(pid, (None, None))
+            mie = [x for x in prov if str(x["user_id"]) == pid]
+
+            giorni_residui = None
+            scaduto = False
+            attribuito = p.get("agente_attribuito_at")
+            if attribuito:
+                data_attr = datetime.fromisoformat(str(attribuito).replace("Z", "+00:00"))
+                if data_attr.tzinfo is None:
+                    data_attr = data_attr.replace(tzinfo=timezone.utc)
+                giorni_residui = 365 - (adesso - data_attr).days
+                scaduto = giorni_residui <= 0
+
+            clienti.append({
+                "user_id": pid,
+                "email": p.get("email") or email_auth,
+                "registrato_at": p.get("created_at") or creato_auth,
+                "attribuito_at": attribuito,
+                "giorni_residui": giorni_residui,
+                "finestra_scaduta": scaduto,
+                "ordini": len(mie),
+                # Solo i pass: le ricariche token non generano provvigione e
+                # quindi non compaiono qui.
+                "acquistato_eur": round(sum(float(x.get("importo_ordine_eur") or 0) for x in mie), 2),
+                "maturato_eur": round(sum(float(x["importo_eur"]) for x in mie if x["stato"] == "maturata"), 2),
+                "liquidato_eur": round(sum(float(x["importo_eur"]) for x in mie if x["stato"] == "liquidata"), 2),
+                "ultimo_ordine_at": max((x.get("created_at") for x in mie if x.get("created_at")), default=None),
+            })
+
+        # Prima chi ha speso di piu': e' il dato che serve leggere per primo.
+        clienti.sort(key=lambda c: (-c["acquistato_eur"], c["email"] or ""))
+        return clienti
+    except Exception as e:
+        logger.error("Dettaglio clienti agente %s fallito: %s: %s",
+                     agente_id, type(e).__name__, e)
+        raise HTTPException(status_code=500, detail="Dettaglio clienti non disponibile.")
+
+
 @router.get("/admin/provvigioni")
 def elenco_provvigioni(user_id: str = Depends(get_current_user)):
     """[ADMIN] Tutte le provvigioni, dalla più recente."""
