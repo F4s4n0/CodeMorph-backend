@@ -40,11 +40,16 @@ def attribuisci_agente(dati: InputAttribuzione, user_id: str = Depends(get_curre
         # .limit(1) e non .single(): subito dopo il signUp la riga di profiles
         # potrebbe non esistere ancora (creata da trigger su auth.users) e
         # .single() solleverebbe, restituendo un 500 al posto di uno stato utile.
-        p = (supabase.table("profiles").select("agente_id")
+        p = (supabase.table("profiles").select("agente_id,role")
              .eq("id", user_id).limit(1).execute())
         if not p.data:
             logger.warning("Profilo %s non ancora presente: attribuzione da ritentare.", user_id)
             return {"status": "profilo_non_pronto"}
+        # Un admin non e' un cliente segnalabile: senza questo, basta aprire
+        # un link ?ref= da loggati per attribuire il proprio account.
+        if p.data[0].get("role") == "admin":
+            logger.info("Attribuzione ignorata: %s e' un account admin.", user_id)
+            return {"status": "non_attribuibile"}
         if p.data[0].get("agente_id"):
             return {"status": "gia_attribuito"}
 
@@ -376,6 +381,34 @@ def clienti_agente(agente_id: str, user_id: str = Depends(get_current_user)):
         logger.error("Dettaglio clienti agente %s fallito: %s: %s",
                      agente_id, type(e).__name__, e)
         raise HTTPException(status_code=500, detail="Dettaglio clienti non disponibile.")
+
+
+@router.delete("/admin/clienti/{cliente_id}/attribuzione")
+def rimuovi_attribuzione(cliente_id: str, user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Sgancia un cliente dal suo agente.
+
+    Serve per correggere le attribuzioni sbagliate (un test, un link aperto
+    per errore). Se il cliente ha gia' generato provvigioni non si tocca
+    nulla: quelle sono documenti contabili e vanno annullate una per una.
+    """
+    _verifica_admin(user_id)
+
+    prov = (supabase.table("provvigioni").select("id")
+            .eq("user_id", cliente_id).limit(1).execute())
+    if prov.data:
+        raise HTTPException(
+            status_code=400,
+            detail="Il cliente ha gia' provvigioni registrate: annullale prima di rimuovere l'attribuzione.",
+        )
+
+    r = (supabase.table("profiles")
+         .update({"agente_id": None, "agente_attribuito_at": None})
+         .eq("id", cliente_id).execute())
+    if not r.data:
+        raise HTTPException(status_code=404, detail="Cliente non trovato.")
+    logger.info("Attribuzione rimossa per il cliente %s (admin %s).", cliente_id, user_id)
+    return {"status": "rimossa"}
 
 
 @router.get("/admin/provvigioni")
