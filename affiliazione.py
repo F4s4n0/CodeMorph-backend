@@ -37,8 +37,15 @@ def attribuisci_agente(dati: InputAttribuzione, user_id: str = Depends(get_curre
         raise HTTPException(status_code=400, detail="Codice mancante.")
 
     try:
-        p = supabase.table("profiles").select("agente_id").eq("id", user_id).single().execute()
-        if p.data and p.data.get("agente_id"):
+        # .limit(1) e non .single(): subito dopo il signUp la riga di profiles
+        # potrebbe non esistere ancora (creata da trigger su auth.users) e
+        # .single() solleverebbe, restituendo un 500 al posto di uno stato utile.
+        p = (supabase.table("profiles").select("agente_id")
+             .eq("id", user_id).limit(1).execute())
+        if not p.data:
+            logger.warning("Profilo %s non ancora presente: attribuzione da ritentare.", user_id)
+            return {"status": "profilo_non_pronto"}
+        if p.data[0].get("agente_id"):
             return {"status": "gia_attribuito"}
 
         a = (supabase.table("agenti").select("id,attivo")
@@ -47,14 +54,27 @@ def attribuisci_agente(dati: InputAttribuzione, user_id: str = Depends(get_curre
             logger.info("Codice agente '%s' inesistente o disattivato.", codice)
             return {"status": "codice_non_valido"}
 
-        supabase.table("profiles").update({
+        upd = supabase.table("profiles").update({
             "agente_id": a.data[0]["id"],
             "agente_attribuito_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", user_id).execute()
+        # Senza questo controllo un UPDATE bloccato da RLS torna 200 con data
+        # vuoto: il log direbbe "attribuito" e il database resterebbe invariato.
+        if not upd.data:
+            logger.error(
+                "Update di profiles a vuoto per %s (codice %s): probabile RLS "
+                "o client Supabase con chiave anon anziche' service role.",
+                user_id, codice,
+            )
+            raise HTTPException(status_code=500, detail="Attribuzione non salvata.")
+
         logger.info("Utente %s attribuito all'agente %s.", user_id, codice)
         return {"status": "attribuito"}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Attribuzione agente fallita per %s: %s", user_id, e)
+        logger.error("Attribuzione agente fallita per %s: %s: %s",
+                     user_id, type(e).__name__, e)
         raise HTTPException(status_code=500, detail="Attribuzione non riuscita.")
 
 
@@ -66,17 +86,28 @@ def registra_provvigione(user_id, order_id, importo_ordine_eur):
     cliente — il compenso si può sempre ricostruire dagli ordini.
     """
     try:
-        p = supabase.table("profiles").select("agente_id").eq("id", user_id).single().execute()
-        agente_id = (p.data or {}).get("agente_id")
-        # Il compenso spetta solo sugli acquisti entro 12 mesi dalla
-        # registrazione del cliente: oltre, l'attribuzione resta ma non paga.
-        attribuito = p.data.get("agente_attribuito_at")
-        if attribuito:
-            data_attr = datetime.fromisoformat(attribuito.replace("Z", "+00:00"))
-            if (datetime.now(timezone.utc) - data_attr).days > 365:
-                return None
+        # agente_attribuito_at DEVE stare nella select, altrimenti la finestra
+        # dei 12 mesi non si applica mai e le provvigioni maturano all'infinito.
+        p = (supabase.table("profiles").select("agente_id,agente_attribuito_at")
+             .eq("id", user_id).limit(1).execute())
+        riga = p.data[0] if p.data else {}
+
+        agente_id = riga.get("agente_id")
         if not agente_id:
             return None                      # cliente diretto: nessuna provvigione
+
+        # Il compenso spetta solo sugli acquisti entro 12 mesi dalla
+        # registrazione del cliente: oltre, l'attribuzione resta ma non paga.
+        attribuito = riga.get("agente_attribuito_at")
+        if attribuito:
+            data_attr = datetime.fromisoformat(str(attribuito).replace("Z", "+00:00"))
+            if data_attr.tzinfo is None:
+                # Timestamp senza offset: senza questo, la sottrazione fra naive
+                # e aware solleva TypeError e la provvigione si perde in silenzio.
+                data_attr = data_attr.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - data_attr).days > 365:
+                logger.info("Ordine %s oltre i 12 mesi dall'attribuzione: nessuna provvigione.", order_id)
+                return None
 
         a = (supabase.table("agenti").select("percentuale,attivo")
              .eq("id", agente_id).single().execute())
@@ -99,8 +130,10 @@ def registra_provvigione(user_id, order_id, importo_ordine_eur):
                     importo, agente_id, order_id)
         return importo
     except Exception as e:
-        # UNIQUE su order_id: se scatta, la provvigione era già registrata
-        logger.warning("Provvigione non registrata per l'ordine %s: %s", order_id, e)
+        # UNIQUE su order_id: se scatta, la provvigione era già registrata.
+        # Il nome dell'eccezione distingue quel caso innocuo da un errore vero.
+        logger.warning("Provvigione non registrata per l'ordine %s: %s: %s",
+                       order_id, type(e).__name__, e)
         return None
 
 import re
