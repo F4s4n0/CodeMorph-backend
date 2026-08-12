@@ -23,7 +23,7 @@ from src.config import WORKSPACE_DIR
 
 logger = logging.getLogger(__name__)
 
-FUSO_ROMA = ZoneInfo("Europe/Rome")\
+FUSO_ROMA = ZoneInfo("Europe/Rome")
 
 
 def log_message(session_id, message):
@@ -36,10 +36,7 @@ def log_message(session_id, message):
 
     log_dir = WORKSPACE_DIR / str(session_id)
     log_file = log_dir / "live_logs.txt"
-    
-    # AGGIUNTA DEBUG: Stampa il percorso assoluto in cui SCRIVE
-    logger.info("✍️ DEBUG SCRITTURA: Scrivo il log in -> %s", log_file.resolve())
-    
+
     try:
         os.makedirs(log_dir, exist_ok=True)
         with open(log_file, "a", encoding="utf-8") as f:
@@ -81,8 +78,19 @@ def crea_logger_attivita(session_id, tasks, etichetta=""):
             ruolo = getattr(output, "agent", None) \
                 or (ruoli[indice] if indice < len(ruoli) else "Agente")
 
-            riassunto = getattr(output, "summary", None)
-            dettaglio = f": {str(riassunto)[:120]}" if riassunto else "."
+            # NON usare output.summary: in CrewAI e' la DESCRIZIONE del task
+            # troncata alle prime parole, non un riassunto del risultato.
+            # Ripeteva la consegna gia' stampata all'avvio, facendo sembrare
+            # che l'agente ricominciasse invece di aver finito.
+            testo = str(getattr(output, "raw", "") or "")
+            if testo:
+                caratteri = len(testo)
+                # Un task "completato" con pochissimo testo e' un fallimento
+                # silenzioso: va visto subito nel log, non a valle.
+                allarme = " ⚠️ output molto breve" if caratteri < 200 else ""
+                dettaglio = f" — {caratteri:,} caratteri prodotti{allarme}".replace(",", ".")
+            else:
+                dettaglio = " — ⚠️ nessun output prodotto"
 
             numero = min(indice + 1, len(ruoli))
             log_message(

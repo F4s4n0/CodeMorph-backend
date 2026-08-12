@@ -344,10 +344,15 @@ def get_iterative_implementation_tasks(
     contesto_sql,
     contesto_funzionale="",
     contesto_test="",
+    tipi_gia_generati=None,
 ):
     """
     Genera i task dinamicamente per UN SINGOLO file legacy,
     iniettando l'architettura globale (ADR + schema DB).
+
+    `tipi_gia_generati` sono le classi/interfacce prodotte durante i file
+    precedenti: senza, ogni passata rigenera le classi condivise con nomi e
+    namespace leggermente diversi (es. Dtos/ e DTOs/ come cartelle distinte).
     """
 
     # 🛡️ PROTEZIONE: Disinnesca le graffe dal codice legacy originale e dai report
@@ -356,6 +361,18 @@ def get_iterative_implementation_tasks(
     safe_sql = _escape_braces(contesto_sql)
     safe_funzionale = _escape_braces(contesto_funzionale)
     safe_test = _escape_braces(contesto_test)
+
+    if tipi_gia_generati:
+        elenco = ", ".join(sorted(tipi_gia_generati)[:150])
+        blocco_tipi_esistenti = f"""
+        TIPI GIÀ GENERATI NEI FILE PRECEDENTI (NON RIDEFINIRLI):
+        {_escape_braces(elenco)}
+        Se ti serve uno di questi, RIUSALO importandolo con lo stesso nome e lo
+        stesso namespace. Non crearne una variante, non cambiarne il nome, non
+        duplicarne il file: sono già presenti nel progetto.
+"""
+    else:
+        blocco_tipi_esistenti = ""
 
     backend_task = Task(
         description=f"""
@@ -382,7 +399,7 @@ def get_iterative_implementation_tasks(
         {safe_legacy}
 
         Ignora completamente la UI, i bottoni o le finestre. Crea solo Endpoint REST (Controller) e Classi di Servizio.
-
+{blocco_tipi_esistenti}
         FORMATO DI OUTPUT OBBLIGATORIO (ripetibile per ogni file generato):
         /// FILEPATH: src/backend/...
         ```
@@ -421,6 +438,19 @@ def get_iterative_implementation_tasks(
 
         Non usare librerie vecchie. Chiama gli endpoint REST del backend.
 
+        CONFINE INVALICABILE — NON RIPRODURRE IL BACKEND:
+        Il codice backend per questo file È GIÀ STATO SCRITTO dal tuo collega e ti
+        viene fornito come contesto. Il tuo compito è CONSUMARLO via HTTP, non
+        riscriverlo. In particolare NON devi mai emettere:
+        - Controller, Service, Repository, DbContext, entità di dominio, DTO lato
+          server, migrazioni, middleware o unit test del backend;
+        - file sotto src/backend/ (i tuoi percorsi iniziano SEMPRE con src/frontend/).
+        Se ti serve una struttura dati che il backend già espone, definisci al più
+        un modello di sola vista lato client e mappalo dalla risposta JSON: non
+        ricopiare la classe del server.
+        Riferisciti agli endpoint del backend per URL e forma del payload, senza
+        ridefinirne l'implementazione.
+{blocco_tipi_esistenti}
         FORMATO DI OUTPUT OBBLIGATORIO (ripetibile per ogni file generato):
         /// FILEPATH: src/frontend/...
         ```

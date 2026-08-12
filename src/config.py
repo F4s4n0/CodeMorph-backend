@@ -226,3 +226,9 @@ BONUS_GIORNI_MASSIMO = 30
 # Con 299 €/giorno = 50 giorni esatti. Oltre: bonifico bancario.
 SOGLIA_MASSIMA_PAYPAL_EUR = Decimal("14950.00")
 # Le coordinate del bonifico NON vanno qui ma nelle variabili d'ambiente:
+
+# Numero di parti oltre il quale il Quality Check viene segnalato come
+# frammentato: con troppe analisi separate il revisore perde il contesto e
+# nessuno vede le interazioni fra le parti. Superarlo di norma significa che
+# gli agenti stanno duplicando codice, non che il progetto e' grande.
+QA_MAX_CHUNK_ATTESI = 5

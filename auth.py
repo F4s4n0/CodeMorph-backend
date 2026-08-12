@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 
 import jwt
@@ -39,6 +40,41 @@ if _mancanti:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 security = HTTPBearer()
+
+# --- Cache delle licenze valide -------------------------------------------
+# Il frontend interroga gli endpoint protetti ogni pochi secondi durante le
+# elaborazioni: senza cache, ogni polling e' una query a Supabase. Su piani
+# con poche risorse questo satura le connessioni proprio mentre e' in corso
+# una chiamata LLM, e la verifica fallisce con [Errno 11] bloccando endpoint
+# di sola lettura come i log.
+#
+# La licenza e' un pass GIORNALIERO: rileggerla ogni minuto e' abbondante.
+_cache_licenze = {}                  # user_id -> (scadenza_licenza, verificata_at)
+_cache_lock = threading.Lock()
+TTL_CACHE_LICENZA = 60               # secondi prima di riverificare su DB
+TOLLERANZA_DB_NON_RAGGIUNGIBILE = 900   # 15 min di grazia se il DB non risponde
+
+
+def _leggi_cache(user_id):
+    with _cache_lock:
+        return _cache_licenze.get(user_id)
+
+
+def _scrivi_cache(user_id, scadenza):
+    with _cache_lock:
+        _cache_licenze[user_id] = (scadenza, datetime.now(timezone.utc))
+
+
+def invalida_cache_licenza(user_id=None):
+    """
+    Da chiamare dopo un acquisto o un rinnovo, altrimenti l'utente resta
+    bloccato fino alla scadenza del TTL pur avendo appena pagato.
+    """
+    with _cache_lock:
+        if user_id is None:
+            _cache_licenze.clear()
+        else:
+            _cache_licenze.pop(user_id, None)
 
 
 def _parse_expiry(expires_at_str):
@@ -90,6 +126,21 @@ def get_current_user(
 
 
 def get_current_user_and_validate_license(user_id: str = Depends(get_current_user)):
+    adesso = datetime.now(timezone.utc)
+
+    # 1. Cache: se la licenza e' stata verificata di recente ed e' ancora
+    #    valida, si evita del tutto la query.
+    in_cache = _leggi_cache(user_id)
+    if in_cache:
+        scadenza, verificata_at = in_cache
+        if (adesso - verificata_at).total_seconds() < TTL_CACHE_LICENZA:
+            if adesso > scadenza:
+                raise HTTPException(
+                    status_code=402,
+                    detail="La tua licenza giornaliera è scaduta. Rinnovala per continuare a usare gli agenti.",
+                )
+            return user_id
+
     # 2. Controllo licenza sul database Supabase.
     #    Ordiniamo per scadenza decrescente: se l'utente ha rinnovato più volte
     #    e ha più righe, conta la licenza PIÙ RECENTE, non la prima trovata.
@@ -103,7 +154,19 @@ def get_current_user_and_validate_license(user_id: str = Depends(get_current_use
             .execute()
         )
     except Exception as e:
-        logger.error("Errore query licenze per utente %s: %s", user_id, e)
+        # Il DB non risponde: NON significa che la licenza sia scaduta.
+        # Se poco fa era valida si lascia passare, altrimenti chi sta pagando
+        # un'elaborazione in corso si vedrebbe bloccare anche la sola lettura
+        # dei log per un errore di risorse temporaneo.
+        logger.error("Errore query licenze per utente %s: %s: %s", user_id, type(e).__name__, e)
+        if in_cache:
+            scadenza, verificata_at = in_cache
+            entro_tolleranza = (adesso - verificata_at).total_seconds() < TOLLERANZA_DB_NON_RAGGIUNGIBILE
+            if entro_tolleranza and adesso <= scadenza:
+                logger.warning(
+                    "Licenza di %s accettata dalla cache: database non raggiungibile.", user_id
+                )
+                return user_id
         raise HTTPException(status_code=503, detail="Servizio licenze temporaneamente non disponibile.")
 
     if not response.data:
@@ -118,7 +181,9 @@ def get_current_user_and_validate_license(user_id: str = Depends(get_current_use
         logger.error("Timestamp licenza malformato per utente %s: %s", user_id, e)
         raise HTTPException(status_code=500, detail="Dati licenza non validi. Contatta il supporto.")
 
-    if datetime.now(timezone.utc) > expires_at:
+    _scrivi_cache(user_id, expires_at)
+
+    if adesso > expires_at:
         raise HTTPException(
             status_code=402,
             detail="La tua licenza giornaliera è scaduta. Rinnovala per continuare a usare gli agenti.",

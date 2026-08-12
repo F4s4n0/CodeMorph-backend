@@ -1,9 +1,11 @@
 import json
 import logging
 import os
+import time                   # il modulo, NON datetime.time: quella e' una
+                              # classe senza sleep() e mascherava il modulo.
 import interruzione
 
-from datetime import datetime, time, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from crewai import Crew, Process
 from src.agents import create_agents
@@ -21,6 +23,7 @@ from src.config import (
     FILE_QUALITY_REPORT,
     FILE_TEST_BOOK,
     QA_CHUNK_MAX_CHARS,
+    QA_MAX_CHUNK_ATTESI,
     FILE_VALIDATION_FASE1,
     FILE_VALIDATION_FASE2,
     FILE_VALIDATION_FASE3,
@@ -169,6 +172,21 @@ def _chunk_text(text, max_chars):
     if current:
         chunks.append("".join(current))
     return chunks
+
+def _tipi_dichiarati(testo):
+    """
+    Nomi di classi/interfacce/record dichiarati in un output generato.
+
+    Serve a dire all'agente successivo cosa esiste già: senza, ogni file
+    rigenera le classi condivise con varianti di nome e namespace (nella
+    stessa sessione sono comparse sia Dtos/ sia DTOs/, due cartelle diverse
+    per la stessa cosa).
+    """
+    import re
+    return set(re.findall(
+        r"\b(?:class|interface|record|struct|enum)\s+([A-Z][A-Za-z0-9_]*)", testo or ""
+    ))
+
 
 def _read_if_exists(path, fallback):
     """Legge un file di contesto se esiste, altrimenti restituisce il fallback."""
@@ -374,6 +392,15 @@ def run_implementation_phase(
 
     esiti = {"completati": [], "falliti": [], "saltati": []}
     totale = len(lista_file_legacy_estratti)
+
+    # Tipi gia' prodotti: iniettati nei task successivi perche' non vengano
+    # ridefiniti. In caso di resume si rileggono dai file gia' scritti, cosi'
+    # il riavvio non riparte "senza memoria" di cosa esiste.
+    tipi_generati = set()
+    if processati:
+        tipi_generati |= _tipi_dichiarati(_read_if_exists(percorso_backend, ""))
+        tipi_generati |= _tipi_dichiarati(_read_if_exists(percorso_frontend, ""))
+
     log_message(
         session_id,
         f"⚙️ Fase 3: {totale} file legacy in coda di migrazione verso {linguaggio_target}.",
@@ -399,6 +426,7 @@ def run_implementation_phase(
             contesto_sql=contesto_sql,
             contesto_funzionale=contesto_funzionale,
             contesto_test=contesto_test,
+            tipi_gia_generati=tipi_generati,
         )
 
         annuncia_avvio, task_callback = crea_logger_attivita(
@@ -443,6 +471,9 @@ def run_implementation_phase(
             # Checkpoint SOLO dopo la scrittura riuscita su entrambi i file
             processati.add(nome_file)
             _save_checkpoint(percorso_checkpoint, processati)
+            # I tipi appena prodotti diventano contesto per i file successivi.
+            tipi_generati |= _tipi_dichiarati(output_backend)
+            tipi_generati |= _tipi_dichiarati(output_frontend)
             esiti["completati"].append(nome_file)
             log_message(
                 session_id,
@@ -451,15 +482,29 @@ def run_implementation_phase(
             if DELAY_TRA_FILE_SEC:
                 time.sleep(DELAY_TRA_FILE_SEC)
 
-        except Exception:
+
+        except Exception as e:
             # Un fallimento su un file (rate limit, timeout, errore LLM) non deve
             # bruciare il lavoro fatto sugli altri: logga e prosegui.
             logger.exception("Errore durante la migrazione di %s — proseguo.", nome_file)
+            # Il tipo dell'eccezione va nel log LIVE, non solo in quello server:
+            # senza, un errore banale dopo il salvataggio sembra un fallimento
+            # della migrazione (e' cosi' che un AttributeError su time.sleep e'
+            # rimasto nascosto marcando come "falliti" file gia' completi).
+            gia_salvato = nome_file in processati
+            nota = " (il file era gia' stato salvato)" if gia_salvato else ""
             log_message(
                 session_id,
-                f"❌ Migrazione di {nome_file} fallita — proseguo con il file successivo.",
+                f"❌ Migrazione di {nome_file} fallita — {type(e).__name__}: {e}{nota} "
+                f"— proseguo con il file successivo.",
             )
-            esiti["falliti"].append(nome_file)
+            # Se il salvataggio era andato a buon fine, il file NON e' fallito:
+            # marcarlo tale falserebbe il riepilogo finale.
+            if gia_salvato:
+                if nome_file not in esiti["completati"]:
+                    esiti["completati"].append(nome_file)
+            else:
+                esiti["falliti"].append(nome_file)
 
 
     # 4. QUALITY CHECK finale, a blocchi per non saturare la context window
@@ -472,6 +517,19 @@ def run_implementation_phase(
 
     chunks = _chunk_text(codice_completo, QA_CHUNK_MAX_CHARS)
     report_qa = []
+    if len(chunks) > QA_MAX_CHUNK_ATTESI:
+        # Oltre questa soglia l'analisi si frammenta: il revisore vede porzioni
+        # di file senza il contesto delle altre e segnala falsi positivi, mentre
+        # nessuno guarda le interazioni fra parti. Il numero alto di parti e'
+        # quasi sempre sintomo di output sproporzionato, non di un progetto
+        # grande: va detto a chi sta pagando le chiamate.
+        log_message(
+            session_id,
+            f"⚠️ Il codice generato ({len(codice_completo):,} caratteri) richiede "
+            f"{len(chunks)} analisi separate: l'esito sara' frammentato. "
+            "Verifica che gli agenti non stiano duplicando lo stesso codice."
+            .replace(",", "."),
+        )
     log_message(
         session_id,
         "🕵️ Avvio Quality Check (OWASP/SonarQube) sul codice generato"

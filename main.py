@@ -630,7 +630,13 @@ def _formatta_riga_log(linea: str) -> str:
 def ottieni_log_live(
     session_id: str,
     da_riga: int = 0,
-    user_id: str = Depends(get_current_user_and_validate_license),
+    # Solo autenticazione: NON la verifica licenza. Questo endpoint legge un
+    # file gia' prodotto e viene interrogato in continuo durante le fasi; se
+    # la verifica licenza fallisce per un problema temporaneo di risorse
+    # ([Errno 11] sotto carico LLM), il log si congela in interfaccia mentre
+    # gli agenti stanno lavorando. La proprieta' della sessione, che e' il
+    # controllo che conta davvero, viene verificata due righe piu' sotto.
+    user_id: str = Depends(get_current_user),
 ):
     """
     Log live della sessione, sincronizzati con l'attività REALE degli agenti
@@ -644,10 +650,7 @@ def ottieni_log_live(
     _verifica_proprieta_sessione(session_id, user_id)
 
     log_path = WORKSPACE_DIR / session_id / "live_logs.txt"
-    
-    # AGGIUNTA DEBUG: Stampa il percorso assoluto in cui CERCA
-    logger.info("🔎 DEBUG LETTURA: Cerco il log in -> %s | Esiste? %s", log_path.resolve(), log_path.exists())
-    
+
     if not log_path.exists():
         return {"logs": "Inizializzazione sessione di log...", "righe_totali": 0, "da_riga": 0}
 
