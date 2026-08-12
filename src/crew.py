@@ -33,6 +33,24 @@ from src.config import (
 )
 from src.graph_builder import raccogli_sorgenti
 from src.live_log import crea_logger_attivita, log_message
+from src.segreti import estrai_segreti_da_sorgenti, maschera_segreti
+
+# Valori di credenziale trovati nei sorgenti del cliente, da rimuovere da OGNI
+# deliverable. Popolato all'inizio di ogni fase da _registra_segreti(): e' a
+# livello di modulo perche' _salva_output_su_disco viene chiamata da tutte le
+# fasi e non riceve il codice sorgente fra i parametri.
+_SEGRETI_SESSIONE = set()
+
+
+def _registra_segreti(*sorgenti):
+    """
+    Aggiunge al registro i segreti trovati nel codice caricato.
+    Da chiamare all'inizio di ogni fase: le fasi 2 e 3 girano in processi che
+    potrebbero non aver eseguito la fase 1 (riavvio di Render, resume).
+    """
+    for testo in sorgenti:
+        if testo:
+            _SEGRETI_SESSIONE.update(estrai_segreti_da_sorgenti(testo))
 from src.tasks import (
     get_understanding_tasks,
     get_design_tasks,
@@ -105,6 +123,13 @@ def _salva_output_su_disco(tasks, output_dir):
         percorso = os.path.join(output_dir, os.path.basename(percorso_task))
         try:
             contenuto = _task_output_text(task)
+            # Mascheramento PRIMA di qualunque scrittura: e' l'unico imbuto da
+            # cui passano tutti i deliverable, quindi il posto giusto per
+            # garantire che nessun segreto finisca in un file scaricabile.
+            contenuto, n_mascherati = maschera_segreti(contenuto, valori_noti=_SEGRETI_SESSIONE)
+            if n_mascherati:
+                logger.info("%s: rimossi %d possibili segreti.",
+                            os.path.basename(percorso), n_mascherati)
             if percorso.lower().endswith(".md"):
                 # Intestazione in Markdown PURO: nessun file esterno referenziato,
                 # così il documento resta integro ovunque venga spostato o inviato.
@@ -209,6 +234,8 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
     (via callback CrewAI); `tracker` accumula i token consumati.
     """
     os.makedirs(output_dir, exist_ok=True)
+
+    _registra_segreti(codice_legacy)
 
     agents = create_agents(llm)
     tasks = get_understanding_tasks(agents, output_dir)
@@ -370,6 +397,10 @@ def run_implementation_phase(
     contesto_funzionale = _read_if_exists(f"{output_dir}/{FILE_FUNCTIONAL_DOC}", "")
     contesto_test = _read_if_exists(f"{output_dir}/{FILE_TEST_BOOK}", "")
 
+    # Fase 3 puo' girare in un processo che non ha eseguito la Fase 1 (riavvio
+    # di Render, resume da checkpoint): i segreti vanno rilevati di nuovo qui.
+    _registra_segreti(*[f.get("codice", "") for f in lista_file_legacy_estratti])
+
     percorso_backend = f"{output_dir}/{FILE_BACKEND_IMPL}"
     percorso_frontend = f"{output_dir}/{FILE_FRONTEND_IMPL}"
     percorso_checkpoint = f"{output_dir}/{FILE_IMPL_CHECKPOINT}"
@@ -459,6 +490,15 @@ def run_implementation_phase(
             # Accesso NOMINATO agli output: niente più tasks[0]/tasks[1]
             output_backend = _task_output_text(impl_tasks.backend)
             output_frontend = _task_output_text(impl_tasks.frontend)
+
+            # Questi due file NON passano da _salva_output_su_disco: il
+            # mascheramento va applicato anche qui, o le credenziali del
+            # sorgente ricompaiono nel codice generato.
+            output_backend, _n1 = maschera_segreti(output_backend, valori_noti=_SEGRETI_SESSIONE)
+            output_frontend, _n2 = maschera_segreti(output_frontend, valori_noti=_SEGRETI_SESSIONE)
+            if _n1 or _n2:
+                logger.info("%s: rimossi %d possibili segreti dal codice generato.",
+                            nome_file, _n1 + _n2)
 
             with open(percorso_backend, "a", encoding="utf-8") as f:
                 f.write(f"\n\n<!-- ===== ORIGINE LEGACY: {nome_file} ===== -->\n\n")
