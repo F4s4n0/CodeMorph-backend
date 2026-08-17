@@ -158,13 +158,9 @@ PREZZI_TOKEN_EUR_PER_1M = {
         "gpt-5.5": {"prompt": Decimal("5.00"), "completion": Decimal("30.00")},
     },
     "google": {
-        "gemini-2.0-flash": {"prompt": Decimal("0.10"), "completion": Decimal("0.40")},
-        "gemini-2.5-flash": {"prompt": Decimal("0.30"), "completion": Decimal("2.50")},
-        "gemini-2.5-flash-lite": {"prompt": Decimal("0.10"), "completion": Decimal("0.40")},
-        "gemini-2.5-pro": {"prompt": Decimal("1.25"), "completion": Decimal("10.00")},
-        "gemini-3.1-flash-lite": {"prompt": Decimal("0.25"), "completion": Decimal("1.50")},
-        "gemini-3.1-flash": {"prompt": Decimal("0.50"), "completion": Decimal("3.00")},
         "gemini-3.1-pro": {"prompt": Decimal("2.00"), "completion": Decimal("12.00")},
+        "gemini-3.5-flash": {"prompt": Decimal("1.50"), "completion": Decimal("9.00")},
+        "gemini-3.6-flash": {"prompt": Decimal("1.50"), "completion": Decimal("9.00")},
     },
     "anthropic": {
         # Costi Anthropic (USD/1M): haiku 1/5 · sonnet-5 3/15 (dal 01/09/26) ·
