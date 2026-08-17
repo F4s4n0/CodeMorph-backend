@@ -152,32 +152,60 @@ RICARICA_MASSIMA_EUR = Decimal("1000.00")
 # non in lista usano la voce "default".
 PREZZI_TOKEN_EUR_PER_1M = {
     "openai": {
-        "gpt-5.4": {"prompt": Decimal("2.50"), "completion": Decimal("15.00")},
-        "gpt-5.4-mini": {"prompt": Decimal("0.25"), "completion": Decimal("2.00")},
-        "gpt-5.4-nano": {"prompt": Decimal("0.20"), "completion": Decimal("1.25")},
-        "gpt-5.5": {"prompt": Decimal("5.00"), "completion": Decimal("30.00")},
+        "gpt-5.4": {
+            "prompt": Decimal("2.50"),
+            "completion": Decimal("15.00"),
+        },
+        "gpt-5.4-mini": {
+            "prompt": Decimal("0.75"),
+            "completion": Decimal("4.50"),
+        },
+        "gpt-5.4-nano": {
+            "prompt": Decimal("0.20"),
+            "completion": Decimal("1.25"),
+        },
+        "gpt-5.5": {
+            "prompt": Decimal("5.00"),
+            "completion": Decimal("30.00"),
+        },
     },
     "google": {
-        "gemini-3.1-pro": {"prompt": Decimal("2.00"), "completion": Decimal("12.00")},
-        "gemini-3.5-flash": {"prompt": Decimal("1.50"), "completion": Decimal("9.00")},
-        "gemini-3.6-flash": {"prompt": Decimal("1.50"), "completion": Decimal("9.00")},
+        "gemini-3.1-pro": {
+            "prompt": Decimal("2.00"),
+            "completion": Decimal("12.00"),
+        },
+        "gemini-3.5-flash": {
+            "prompt": Decimal("1.50"),
+            "completion": Decimal("9.00"),
+        },
+        "gemini-3.6-flash": {
+            "prompt": Decimal("1.50"),
+            "completion": Decimal("7.50"),
+        },
     },
     "anthropic": {
-        # Costi Anthropic (USD/1M): haiku 1/5 · sonnet-5 3/15 (dal 01/09/26) ·
-        # opus-5 5/25 · fable-5 10/50. Qui prezzi di VENDITA in EUR: valore USD +10%.
-        # Margine complessivo ~18% (10% esplicito + differenza di cambio EUR/USD).
-        "claude-haiku-4-5-20251001": {"prompt": Decimal("1.10"), "completion": Decimal("5.50")},
-        "claude-haiku-4.5":          {"prompt": Decimal("1.10"), "completion": Decimal("5.50")},
-        "claude-sonnet-4.6":         {"prompt": Decimal("3.30"), "completion": Decimal("16.50")},
-        "claude-sonnet-5":           {"prompt": Decimal("3.30"), "completion": Decimal("16.50")},
-        "claude-opus-4.6":           {"prompt": Decimal("5.50"), "completion": Decimal("27.50")},
-        "claude-opus-4.7":           {"prompt": Decimal("5.50"), "completion": Decimal("27.50")},
-        "claude-opus-4.8":           {"prompt": Decimal("5.50"), "completion": Decimal("27.50")},
-        "claude-opus-5":             {"prompt": Decimal("5.50"), "completion": Decimal("27.50")},
-        "claude-fable-5":            {"prompt": Decimal("11.00"), "completion": Decimal("55.00")},
+        "claude-haiku-4-5-20251001": {
+            "prompt": Decimal("1.10"),
+            "completion": Decimal("5.50"),
+        },
+        "claude-haiku-4.5": {
+            "prompt": Decimal("1.10"),
+            "completion": Decimal("5.50"),
+        },
+        "claude-sonnet-5": {
+            "prompt": Decimal("3.30"),
+            "completion": Decimal("16.50"),
+        },
+        "claude-opus-5": {
+            "prompt": Decimal("5.50"),
+            "completion": Decimal("27.50"),
+        },
+        "claude-fable-5": {
+            "prompt": Decimal("11.00"),
+            "completion": Decimal("55.00"),
+        },
     },
     "default": {
-        # Prudenziale: un modello non a listino costa almeno quanto un Opus
         "prompt": Decimal("5.50"),
         "completion": Decimal("27.50"),
     },
