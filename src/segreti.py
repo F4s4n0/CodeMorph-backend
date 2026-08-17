@@ -87,6 +87,44 @@ def _e_placeholder(valore):
     return False
 
 
+def _varianti_segreto(valore):
+    """
+    Forme alternative sotto cui un segreto puo' ricomparire negli output.
+
+    Gli agenti non sempre copiano il valore alla lettera: dentro i diagrammi
+    Mermaid il carattere '$' rompe la sintassi, e una password come
+    'abc123XYZ$' e' stata riscritta come 'abc123XYZ dollar'. La sostituzione
+    letterale non trovava piu' corrispondenza e il segreto sopravviveva.
+
+    Si generano quindi anche: il nucleo alfanumerico (se abbastanza lungo da
+    non essere ambiguo) e le versioni con i simboli finali sostituiti dal loro
+    nome. Sotto gli 8 caratteri il nucleo NON viene usato: il rischio di
+    cancellare parole innocue dai documenti supererebbe il beneficio.
+    """
+    varianti = {valore}
+
+    nucleo = re.sub(r"[^A-Za-z0-9]", "", valore)
+    if len(nucleo) >= 8 and nucleo != valore:
+        varianti.add(nucleo)
+
+    # Simbolo finale scritto per esteso ('$' -> ' dollar', '_' -> ' underscore')
+    nomi = {
+        "$": ["dollar", "dollaro"], "!": ["exclamation"], "#": ["hash", "cancelletto"],
+        "%": ["percent", "percento"], "&": ["ampersand", "e commerciale"],
+        "@": ["at", "chiocciola"], "*": ["asterisk", "asterisco"],
+    }
+    for simbolo, parole in nomi.items():
+        if simbolo in valore:
+            base = valore.replace(simbolo, "")
+            for parola in parole:
+                varianti.add(f"{base} {parola}")
+                varianti.add(f"{base}{parola}")
+                varianti.add(valore.replace(simbolo, f" {parola}"))
+                varianti.add(valore.replace(simbolo, parola))
+
+    return varianti
+
+
 def estrai_segreti_da_sorgenti(testo):
     """
     Valori letterali di credenziali presenti nel CODICE SORGENTE caricato.
@@ -116,7 +154,7 @@ def estrai_segreti_da_sorgenti(testo):
             # Sotto i 4 caratteri il rischio di rimuovere testo innocuo dai
             # documenti supera il beneficio.
             if len(valore) >= 4 and not _e_placeholder(valore):
-                trovati.add(valore)
+                trovati.update(_varianti_segreto(valore))
 
     if trovati:
         logger.info("Individuati %d valori di credenziale nei sorgenti: "

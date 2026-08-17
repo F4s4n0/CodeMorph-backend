@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import time                   # il modulo, NON datetime.time: quella e' una
                               # classe senza sleep() e mascherava il modulo.
 import interruzione
@@ -198,6 +199,112 @@ def _chunk_text(text, max_chars):
         chunks.append("".join(current))
     return chunks
 
+def _tronca_su_sezioni(testo, max_char):
+    """
+    Taglia sui confini di sezione markdown invece che a metà frase.
+    E' la rete di sicurezza di _sintetizza_contesto: se la sintesi non è
+    disponibile, meglio un documento parziale ma leggibile che nessun contesto.
+    """
+    if not testo or len(testo) <= max_char:
+        return testo
+    pezzi, totale = [], 0
+    for blocco in re.split(r"(?m)^(?=#{1,3} )", testo):
+        if totale + len(blocco) > max_char:
+            break
+        pezzi.append(blocco)
+        totale += len(blocco)
+    ridotto = "".join(pezzi) or testo[:max_char]
+    return ridotto + "\n\n[...documento troncato: sezioni successive omesse.]"
+
+
+# La sintesi di un documento è la stessa per tutti i file della fase: si
+# calcola una volta sola, altrimenti ogni retry pagherebbe di nuovo la stessa
+# chiamata.
+_cache_sintesi = {}
+
+
+def _sintetizza_contesto(llm, testo, etichetta, max_char=8000):
+    """
+    Condensa un documento di contesto mantenendone la sostanza operativa.
+
+    Serve nel secondo tentativo di migrazione: il prompt va alleggerito, ma
+    eliminare del tutto la documentazione funzionale priverebbe l'agente del
+    comportamento atteso. Meglio una sintesi che il vuoto.
+
+    Non solleva mai: se la chiamata fallisce si ripiega sul troncamento. Questo
+    codice gira DOPO un fallimento, quindi non deve introdurre un secondo modo
+    di fallire.
+    """
+    if not testo or len(testo) <= max_char:
+        return testo
+
+    chiave = (etichetta, len(testo))
+    if chiave in _cache_sintesi:
+        return _cache_sintesi[chiave]
+
+    prompt = (
+        f"Sintetizza il seguente documento ({etichetta}) in meno di {max_char} caratteri, "
+        "per un ingegnere che deve riscrivere il software in un'altra tecnologia.\n\n"
+        "CONSERVA: regole di business, comportamenti attesi, vincoli, casi limite, "
+        "nomi di entità/campi/funzioni citati, criteri di accettazione.\n"
+        "ELIMINA: introduzioni, motivazioni, ripetizioni, project management, "
+        "considerazioni di metodo.\n"
+        "Rispondi SOLO con la sintesi, in elenchi puntati compatti, senza preamboli.\n\n"
+        f"---\n{testo}"
+    )
+
+    try:
+        risposta = llm.call([{"role": "user", "content": prompt}])
+        sintesi = str(risposta or "").strip()
+        if len(sintesi) < 200:
+            # Risposta inutilizzabile: è esattamente il caso che stiamo
+            # cercando di aggirare, quindi non insistiamo.
+            raise ValueError(f"sintesi troppo breve ({len(sintesi)} caratteri)")
+        sintesi = f"[SINTESI DI {etichetta} — documento completo disponibile nei deliverable]\n\n{sintesi}"
+        logger.info("Contesto '%s' sintetizzato: %d -> %d caratteri.",
+                    etichetta, len(testo), len(sintesi))
+    except Exception as e:
+        logger.warning("Sintesi di '%s' non riuscita (%s: %s): uso il troncamento.",
+                       etichetta, type(e).__name__, e)
+        sintesi = _tronca_su_sezioni(testo, max_char)
+
+    _cache_sintesi[chiave] = sintesi
+    return sintesi
+
+
+def _vale_un_secondo_tentativo(errore):
+    """
+    True se il fallimento non ha una causa nel merito e puo' rientrare da solo.
+
+    Ritentare ha senso quando il modello non ha prodotto nulla di utilizzabile
+    (risposta vuota, troncata, timeout, sovraccarico): sono episodi che spesso
+    non si ripetono. NON ha senso su chiave mancante, credito esaurito o
+    prompt malformato, dove il secondo tentativo brucerebbe solo altri token.
+
+    LiteLLM ritenta gia' da sé gli errori di rete (num_retries): qui si copre
+    il livello sopra, cioe' la risposta arrivata ma inservibile.
+    """
+    testo = f"{type(errore).__name__}: {errore}".lower()
+
+    inutile_ritentare = (
+        "api_key", "api key", "authentication", "unauthorized", "permission",
+        "not found", "notfounderror", "invalid model", "credito", "quota",
+        "insufficient", "billing",
+    )
+    if any(s in testo for s in inutile_ritentare):
+        return False
+
+    vale_la_pena = (
+        "none or empty",        # CrewAI: risposta senza testo utilizzabile
+        "invalid response",
+        "timeout", "timed out",
+        "overloaded", "529",
+        "max_tokens", "truncated", "length",
+        "connection", "temporarily",
+    )
+    return any(s in testo for s in vale_la_pena)
+
+
 def _tipi_dichiarati(testo):
     """
     Nomi di classi/interfacce/record dichiarati in un output generato.
@@ -207,7 +314,6 @@ def _tipi_dichiarati(testo):
     stessa sessione sono comparse sia Dtos/ sia DTOs/, due cartelle diverse
     per la stessa cosa).
     """
-    import re
     return set(re.findall(
         r"\b(?:class|interface|record|struct|enum)\s+([A-Z][A-Za-z0-9_]*)", testo or ""
     ))
@@ -448,41 +554,85 @@ def run_implementation_phase(
             esiti["saltati"].append(nome_file)
             continue
 
-        impl_tasks = get_iterative_implementation_tasks(
-            agents=agents,
-            linguaggio_target=linguaggio_target,
-            nome_file_legacy=nome_file,
-            contenuto_file_legacy=file_info["codice"],
-            contesto_adr=contesto_adr,
-            contesto_sql=contesto_sql,
-            contesto_funzionale=contesto_funzionale,
-            contesto_test=contesto_test,
-            tipi_gia_generati=tipi_generati,
-        )
+        def _costruisci_crew(alleggerito=False):
+            """
+            Prepara i task per questo file. Con alleggerito=True i contesti
+            DISCORSIVI (documentazione funzionale, test book) vengono sintetizzati
+            invece che eliminati: l'agente perde la prosa ma conserva regole di
+            business e criteri di accettazione.
 
-        annuncia_avvio, task_callback = crea_logger_attivita(
-            session_id,
-            impl_tasks.as_list(),
-            etichetta=f"file {indice}/{totale}: {nome_file}",
-        )
-        def step_con_stop(step):
-            interruzione.verifica_stop(session_id)   # solleva se richiesto
+            ADR e schema SQL restano INTEGRI: sono densi di informazione
+            strutturale, e una sintesi produrrebbe codice che riferisce tabelle
+            o colonne inesistenti.
+            """
+            if alleggerito:
+                funzionale = _sintetizza_contesto(llm, contesto_funzionale, "documentazione funzionale")
+                test = _sintetizza_contesto(llm, contesto_test, "test book")
+            else:
+                funzionale, test = contesto_funzionale, contesto_test
 
-        dev_crew = Crew(
-            agents=[agents["senior_migration_developer"], agents["frontend_developer"]],
-            tasks=impl_tasks.as_list(),
-            process=Process.sequential,
-            verbose=False,  # Silenzioso per non inondare la console
-            memory=False,
-            step_callback=step_con_stop,
-            task_callback=task_callback,  # Il log live segue il lavoro reale sul file
-        )
+            tasks_file = get_iterative_implementation_tasks(
+                agents=agents,
+                linguaggio_target=linguaggio_target,
+                nome_file_legacy=nome_file,
+                contenuto_file_legacy=file_info["codice"],
+                contesto_adr=contesto_adr,
+                contesto_sql=contesto_sql,
+                contesto_funzionale=funzionale,
+                contesto_test=test,
+                tipi_gia_generati=tipi_generati,
+            )
+            etichetta = f"file {indice}/{totale}: {nome_file}"
+            if alleggerito:
+                etichetta += " (2° tentativo)"
+            avvio, callback = crea_logger_attivita(session_id, tasks_file.as_list(), etichetta=etichetta)
+
+            def step_con_stop(step):
+                interruzione.verifica_stop(session_id)   # solleva se richiesto
+
+            crew_file = Crew(
+                agents=[agents["senior_migration_developer"], agents["frontend_developer"]],
+                tasks=tasks_file.as_list(),
+                process=Process.sequential,
+                verbose=False,  # Silenzioso per non inondare la console
+                memory=False,
+                step_callback=step_con_stop,
+                task_callback=callback,  # Il log live segue il lavoro reale sul file
+            )
+            return tasks_file, crew_file, avvio
+
+        impl_tasks, dev_crew, annuncia_avvio = _costruisci_crew()
 
         try:
             logger.info("Migrazione di %s in corso...", nome_file)
             log_message(session_id, f"📦 ({indice}/{totale}) Migrazione di {nome_file} avviata...")
             annuncia_avvio()
-            dev_crew.kickoff()
+            try:
+                dev_crew.kickoff()
+            except Exception as primo_errore:
+                # Un secondo tentativo ha senso solo per i fallimenti SENZA una
+                # causa nel merito: risposta vuota, troncata, timeout. Un errore
+                # di configurazione o di credito si ripeterebbe identico, e uno
+                # stop richiesto dall'utente non va mai aggirato.
+                if isinstance(primo_errore, interruzione.FaseInterrotta) or \
+                        not _vale_un_secondo_tentativo(primo_errore):
+                    raise
+                logger.warning("Primo tentativo fallito su %s (%s): riprovo con contesto ridotto.",
+                               nome_file, type(primo_errore).__name__)
+                log_message(
+                    session_id,
+                    f"🔄 ({indice}/{totale}) {nome_file}: nessuna risposta utile dal modello "
+                    f"({type(primo_errore).__name__}). Riprovo con la documentazione sintetizzata...",
+                )
+                if tracker is not None:
+                    # Il tentativo fallito ha comunque consumato token: va
+                    # contabilizzato, altrimenti l'addebito risulta piu' basso
+                    # del consumo reale.
+                    tracker.aggiungi_crew(dev_crew)
+                impl_tasks, dev_crew, annuncia_avvio = _costruisci_crew(alleggerito=True)
+                annuncia_avvio()
+                dev_crew.kickoff()
+
             if tracker is not None:
                 tracker.aggiungi_crew(dev_crew)
                 _salva_consumo_parziale(session_id, tracker)

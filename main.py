@@ -41,6 +41,39 @@ from trial import router as trial_router
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
+
+
+class MascheraChiaviURL(logging.Filter):
+    """
+    httpx registra l'URL completo di ogni richiesta HTTP. Google passa la
+    chiave API in query string (?key=...), quindi senza questo filtro la
+    chiave finisce IN CHIARO nei log di Render, che sono consultabili e
+    spesso vengono copiati altrove per chiedere aiuto.
+    Anthropic non e' esposta allo stesso modo (chiave nell'header).
+    """
+
+    _CHIAVE = re.compile(
+        r"([?&](?:key|api_key|apikey|access_token|token)=)[^&\s\"']+",
+        re.IGNORECASE,
+    )
+
+    def filter(self, record):
+        try:
+            record.msg = self._CHIAVE.sub(r"\1***", str(record.msg))
+            if record.args:
+                record.args = tuple(
+                    self._CHIAVE.sub(r"\1***", a) if isinstance(a, str) else a
+                    for a in record.args
+                )
+        except Exception:
+            pass          # il logging non deve mai far fallire una richiesta
+        return True
+
+
+# Sul logger "httpx", non sul root: i filtri NON si propagano ai logger figli,
+# quindi applicarlo altrove non avrebbe alcun effetto.
+logging.getLogger("httpx").addFilter(MascheraChiaviURL())
+
 logger = logging.getLogger(__name__)
 
 # WORKSPACE_DIR è definita in src/config.py: è l'UNICA fonte di verità,
