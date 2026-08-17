@@ -170,7 +170,7 @@ PREZZI_TOKEN_EUR_PER_1M = {
         },
     },
     "google": {
-        "gemini-3.1-pro": {
+        "gemini-3.1-pro-preview": {
             "prompt": Decimal("2.00"),
             "completion": Decimal("12.00"),
         },
