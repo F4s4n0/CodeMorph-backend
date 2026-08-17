@@ -162,6 +162,10 @@ def _salva_output_su_disco(tasks, output_dir):
             if n_mascherati:
                 logger.info("%s: rimossi %d possibili segreti.",
                             os.path.basename(percorso), n_mascherati)
+            contenuto, n_mermaid = _normalizza_mermaid(contenuto)
+            if n_mermaid:
+                logger.info("%s: corrette %d anomalie di sintassi Mermaid.",
+                            os.path.basename(percorso), n_mermaid)
             if percorso.lower().endswith(".md"):
                 # Intestazione in Markdown PURO: nessun file esterno referenziato,
                 # così il documento resta integro ovunque venga spostato o inviato.
@@ -229,6 +233,52 @@ def _chunk_text(text, max_chars):
     if current:
         chunks.append("".join(current))
     return chunks
+
+def _normalizza_mermaid(testo):
+    """
+    Corregge gli errori di sintassi Mermaid piu' frequenti PRIMA della scrittura.
+
+    Le regole nel prompt riducono il problema ma non lo eliminano: basta uno
+    spazio di troppo e il cliente apre un deliverable con un errore di parsing
+    al posto del diagramma. Qui il controllo e' deterministico e vale per tutti
+    i documenti, di tutte le fasi, con qualunque modello.
+
+    Interviene SOLO dentro i blocchi ```mermaid: il resto del markdown non
+    viene toccato.
+    """
+    if not testo or "```mermaid" not in testo:
+        return testo, 0
+
+    conteggio = 0
+
+    def _corpo(m):
+        nonlocal conteggio
+        corpo = m.group(2)
+
+        # 1. Spazio fra ID ed etichetta: `nodo_id ["Testo"]` non renderizza.
+        corpo, n1 = re.subn(r'([A-Za-z0-9_]) +(\[")', r'\1\2', corpo)
+
+        # 2. '&' dentro un'etichetta: ammessa in teoria, ma rompe il parsing
+        #    in diverse versioni del renderer. Sostituita SOLO dentro le
+        #    etichette fra virgolette, mai nella sintassi del grafo.
+        n2 = 0
+
+        def _senza_ampersand(match):
+            nonlocal n2
+            etichetta = match.group(0)
+            if "&" not in etichetta:
+                return etichetta
+            n2 += etichetta.count("&")
+            return etichetta.replace("&", "e")
+
+        corpo = re.sub(r'"[^"\n]*"', _senza_ampersand, corpo)
+
+        conteggio += n1 + n2
+        return m.group(1) + corpo + m.group(3)
+
+    risultato = re.sub(r'(```mermaid\n)(.*?)(```)', _corpo, testo, flags=re.DOTALL)
+    return risultato, conteggio
+
 
 def _tronca_su_sezioni(testo, max_char):
     """
