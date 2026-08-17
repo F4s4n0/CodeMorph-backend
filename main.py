@@ -269,10 +269,11 @@ def _estrai_zip_sicuro(zip_path: Path, destinazione: Path):
 
 # File interni/ridondanti da NON includere negli zip consegnati all'utente
 FILE_ESCLUSI_DALLO_ZIP = {
-    "live_logs.txt",                  # log live: serve al terminale del frontend, non al deliverable
-    "solution_upload.zip",            # copia dello zip caricato dall'utente: ce l'ha già
-    "_implementation_checkpoint.json" # stato interno del resume della Fase 3
-    "_file_selezionati.json"          # lista file selezionati dall'utente in fase di upload
+    "live_logs.txt",                   # log live: serve al terminale del frontend, non al deliverable
+    "solution_upload.zip",             # copia dello zip caricato dall'utente: ce l'ha già
+    "_implementation_checkpoint.json", # stato interno del resume della Fase 3
+    "_file_selezionati.json",          # lista file selezionati dall'utente in fase di upload
+    "_segreti.json",                   # credenziali rilevate nei sorgenti: MAI consegnarle
 }
 
 def _crea_zip_fase(percorso_base_senza_estensione, cartella_sessione, escludi_cartelle=()):

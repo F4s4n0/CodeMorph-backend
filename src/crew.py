@@ -46,12 +46,43 @@ _SEGRETI_SESSIONE = set()
 def _registra_segreti(*sorgenti):
     """
     Aggiunge al registro i segreti trovati nel codice caricato.
-    Da chiamare all'inizio di ogni fase: le fasi 2 e 3 girano in processi che
+    Da chiamare all'inizio di OGNI fase: le fasi 2 e 3 girano in processi che
     potrebbero non aver eseguito la fase 1 (riavvio di Render, resume).
     """
     for testo in sorgenti:
         if testo:
             _SEGRETI_SESSIONE.update(estrai_segreti_da_sorgenti(testo))
+
+
+def _carica_segreti_sessione(output_dir):
+    """
+    Registro dei segreti persistito nella cartella di sessione.
+
+    Il set in memoria si azzera a ogni riavvio del processo: senza questo file,
+    una fase ripresa dopo un riavvio scriverebbe i deliverable con le
+    credenziali in chiaro, pur avendo il filtro attivo.
+    """
+    percorso = os.path.join(output_dir, "_segreti.json")
+    try:
+        if os.path.exists(percorso):
+            with open(percorso, "r", encoding="utf-8") as f:
+                _SEGRETI_SESSIONE.update(json.load(f))
+    except Exception as e:
+        logger.warning("Registro segreti non leggibile (%s): si riparte dai sorgenti.",
+                       type(e).__name__)
+
+
+def _salva_segreti_sessione(output_dir):
+    """Il file NON va incluso nello ZIP consegnato al cliente."""
+    if not _SEGRETI_SESSIONE:
+        return
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        with open(os.path.join(output_dir, "_segreti.json"), "w", encoding="utf-8") as f:
+            json.dump(sorted(_SEGRETI_SESSIONE), f)
+    except Exception as e:
+        logger.warning("Registro segreti non salvato (%s): dopo un riavvio andrà ricostruito.",
+                       type(e).__name__)
 from src.tasks import (
     get_understanding_tasks,
     get_design_tasks,
@@ -341,7 +372,9 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
     """
     os.makedirs(output_dir, exist_ok=True)
 
+    _carica_segreti_sessione(output_dir)
     _registra_segreti(codice_legacy)
+    _salva_segreti_sessione(output_dir)
 
     agents = create_agents(llm)
     tasks = get_understanding_tasks(agents, output_dir)
@@ -428,7 +461,15 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
         contesto_sorgenti = raccogli_sorgenti(cartella_sorgenti, file_ammessi=ammessi)
     if not contesto_sorgenti:
         contesto_sorgenti = "Codice sorgente non disponibile in questa sessione."
-        
+
+    # ANCHE la Fase 2 deve registrare i segreti: puo' girare in un processo
+    # che non ha eseguito la Fase 1 (riavvio di Render fra un checkpoint e
+    # l'altro), e in quel caso il registro sarebbe vuoto proprio mentre si
+    # scrive il migration plan — che cita le credenziali cablate da rimuovere.
+    _carica_segreti_sessione(output_dir)
+    _registra_segreti(contesto_sorgenti)
+    _salva_segreti_sessione(output_dir)
+
     agents = create_agents(llm)
     tasks = get_design_tasks(agents, output_dir, contesto_fase1=contesto_fase1)
     annuncia_avvio, task_callback = crea_logger_attivita(
@@ -505,7 +546,9 @@ def run_implementation_phase(
 
     # Fase 3 puo' girare in un processo che non ha eseguito la Fase 1 (riavvio
     # di Render, resume da checkpoint): i segreti vanno rilevati di nuovo qui.
+    _carica_segreti_sessione(output_dir)
     _registra_segreti(*[f.get("codice", "") for f in lista_file_legacy_estratti])
+    _salva_segreti_sessione(output_dir)
 
     percorso_backend = f"{output_dir}/{FILE_BACKEND_IMPL}"
     percorso_frontend = f"{output_dir}/{FILE_FRONTEND_IMPL}"
