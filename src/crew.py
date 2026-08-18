@@ -234,6 +234,70 @@ def _chunk_text(text, max_chars):
         chunks.append("".join(current))
     return chunks
 
+def _normalizza_percorsi(testo, registro_cartelle, e_frontend):
+    """
+    Riconduce i percorsi `/// FILEPATH:` a una struttura unica e coerente.
+
+    Ogni file legacy viene migrato in una passata separata e l'agente ricostruisce
+    ogni volta la propria idea di struttura: nella stessa sessione sono comparsi
+    `src/backend/CognosMonitor.API/` e `src/CognosMonitor.API/` (due radici per lo
+    stesso progetto), test sia sotto `src/` sia sotto `tests/`, e le cartelle
+    `Dtos/` e `DTOs/` — che su un file system case-sensitive sono due cartelle
+    diverse e impediscono la compilazione.
+
+    Tre regole, tutte deterministiche:
+    1. radice corretta: `src/backend`, `src/frontend` o `tests/...` per i progetti
+       di test, dedotta dall'agente che ha prodotto il blocco;
+    2. maiuscole coerenti: la PRIMA forma vista di una cartella diventa quella
+       canonica per tutta la sessione (registro_cartelle);
+    3. separatori normalizzati e prefissi spuri rimossi.
+
+    `registro_cartelle` va condiviso fra tutti i file della fase, altrimenti la
+    canonizzazione vale solo dentro un singolo file e il problema resta.
+    """
+    if not testo:
+        return testo, 0
+
+    radice_area = "frontend" if e_frontend else "backend"
+    conteggio = 0
+
+    def _canonica(segmento):
+        """Prima forma vista di una cartella: quella vince, sempre."""
+        chiave = segmento.lower()
+        if chiave not in registro_cartelle:
+            registro_cartelle[chiave] = segmento
+        return registro_cartelle[chiave]
+
+    def _sistema(match):
+        nonlocal conteggio
+        originale = match.group(2).strip()
+
+        percorso = originale.replace("\\", "/").lstrip("./").lstrip("/")
+        parti = [p for p in percorso.split("/") if p and p != "."]
+        if not parti:
+            return match.group(0)
+
+        # Via i prefissi di radice: vengono ricostruiti dopo, uniformi.
+        while parti and parti[0].lower() in ("src", "tests", "test", "backend", "frontend"):
+            parti.pop(0)
+        if not parti:
+            return match.group(0)
+
+        # Un progetto di test va sotto tests/, ovunque l'agente l'abbia messo.
+        e_test = any(p.lower().endswith((".tests", ".integrationtests", ".unittests"))
+                     for p in parti)
+
+        cartelle = [_canonica(p) for p in parti[:-1]]
+        nuovo = "/".join((["tests"] if e_test else ["src"]) + [radice_area] + cartelle + [parti[-1]])
+
+        if nuovo != originale:
+            conteggio += 1
+        return f"{match.group(1)}{nuovo}"
+
+    risultato = re.sub(r"(///\s*FILEPATH:\s*)(.+)", _sistema, testo)
+    return risultato, conteggio
+
+
 def _normalizza_mermaid(testo):
     """
     Corregge gli errori di sintassi Mermaid piu' frequenti PRIMA della scrittura.
@@ -631,6 +695,16 @@ def run_implementation_phase(
         tipi_generati |= _tipi_dichiarati(_read_if_exists(percorso_backend, ""))
         tipi_generati |= _tipi_dichiarati(_read_if_exists(percorso_frontend, ""))
 
+    # Forma canonica delle cartelle, condivisa fra TUTTI i file della fase:
+    # senza, ogni passata sceglie le proprie maiuscole e nascono Dtos/ e DTOs/.
+    # In caso di resume si ricostruisce dai percorsi gia' scritti.
+    registro_cartelle = {}
+    if processati:
+        for gia_scritto in (_read_if_exists(percorso_backend, ""), _read_if_exists(percorso_frontend, "")):
+            for percorso_noto in re.findall(r"///\s*FILEPATH:\s*(.+)", gia_scritto):
+                for segmento in percorso_noto.strip().split("/")[:-1]:
+                    registro_cartelle.setdefault(segmento.lower(), segmento)
+
     log_message(
         session_id,
         f"⚙️ Fase 3: {totale} file legacy in coda di migrazione verso {linguaggio_target}.",
@@ -742,6 +816,14 @@ def run_implementation_phase(
             if _n1 or _n2:
                 logger.info("%s: rimossi %d possibili segreti dal codice generato.",
                             nome_file, _n1 + _n2)
+
+            # Percorsi ricondotti a una struttura unica: il backend non puo'
+            # finire in due radici diverse, i test devono stare sotto tests/,
+            # e Dtos/ e DTOs/ non possono coesistere.
+            output_backend, _p1 = _normalizza_percorsi(output_backend, registro_cartelle, e_frontend=False)
+            output_frontend, _p2 = _normalizza_percorsi(output_frontend, registro_cartelle, e_frontend=True)
+            if _p1 or _p2:
+                logger.info("%s: normalizzati %d percorsi di file.", nome_file, _p1 + _p2)
 
             with open(percorso_backend, "a", encoding="utf-8") as f:
                 f.write(f"\n\n<!-- ===== ORIGINE LEGACY: {nome_file} ===== -->\n\n")
