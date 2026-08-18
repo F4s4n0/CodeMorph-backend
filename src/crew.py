@@ -94,6 +94,34 @@ from src.tasks import (
 logger = logging.getLogger(__name__)
 
 
+def _salva_metriche(session_id, **valori):
+    """
+    Scrive su DB le metriche della sessione (righe analizzate, rilievi trovati).
+
+    Sono numeri che il sistema PRODUCE gia' ma non conserva: la dimensione del
+    sorgente finisce solo in un log, i rilievi solo dentro un markdown. Senza
+    questa scrittura andrebbero persi ad ogni sessione, e un domani non si
+    potrebbe dire quante righe di legacy si sono analizzate finora.
+
+    Best-effort: una metrica mancante non deve mai fermare la pipeline.
+    """
+    if not session_id:
+        return
+    puliti = {k: v for k, v in valori.items() if v is not None}
+    if not puliti:
+        return
+    try:
+        from auth import supabase          # import locale: evita cicli
+        supabase.table("migration_sessions").update(puliti).eq("id", session_id).execute()
+        logger.info("Metriche salvate per %s: %s", session_id, puliti)
+    except Exception as e:
+        # Colonna assente = migrazione non eseguita: va detto a voce alta,
+        # altrimenti si scopre solo quando le statistiche restano a zero.
+        logger.warning("Metriche non salvate per %s (%s: %s). "
+                       "Hai eseguito migrazione_metriche.sql?",
+                       session_id, type(e).__name__, e)
+
+
 def _salva_consumo_parziale(session_id, tracker):
     """
     Scrive su DB il consumo accumulato FINORA, dopo ogni crew completata.
@@ -489,6 +517,17 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
     _carica_segreti_sessione(output_dir)
     _registra_segreti(codice_legacy)
     _salva_segreti_sessione(output_dir)
+
+    # Dimensione del legacy analizzato: si misura QUI perche' e' l'unico
+    # punto in cui il sorgente completo e' in memoria. Il marcatore usato dal
+    # raccoglitore permette di contare anche quanti file lo compongono.
+    testo_legacy = codice_legacy or ""
+    _salva_metriche(
+        session_id,
+        righe_legacy=testo_legacy.count("\n") + 1 if testo_legacy else 0,
+        caratteri_legacy=len(testo_legacy),
+        file_legacy_analizzati=testo_legacy.count("----- FILE:") or None,
+    )
 
     agents = create_agents(llm)
     tasks = get_understanding_tasks(agents, output_dir)
@@ -946,6 +985,26 @@ def run_implementation_phase(
             report_qa.append(f"QUALITY CHECK FALLITO ({etichetta or 'unico'})")
 
     esiti["quality_report"] = "\n\n---\n\n".join(report_qa)
+
+    # Rilievi per gravita': il Quality Check li produce come testo, quindi si
+    # contano qui una volta sola, prima che il dato diventi solo markdown.
+    # Il conteggio e' per righe, non per occorrenze: una riga di tabella o un
+    # titolo valgono un rilievo, la stessa parola ripetuta in un paragrafo no.
+    testo_qa = esiti["quality_report"] or ""
+    critici = alti = 0
+    for riga in testo_qa.splitlines():
+        maiuscola = riga.upper()
+        if "CRITICO" in maiuscola or "CRITICAL" in maiuscola:
+            critici += 1
+        elif "ALTO" in maiuscola or "ALTA" in maiuscola or "HIGH" in maiuscola:
+            alti += 1
+    _salva_metriche(
+        session_id,
+        rilievi_critici=critici,
+        rilievi_alti=alti,
+        rilievi_totali=critici + alti,
+    )
+
     log_message(
         session_id,
         f"📈 Fase 3: pipeline completata — {len(esiti['completati'])} migrati, "
