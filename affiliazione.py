@@ -412,12 +412,76 @@ def rimuovi_attribuzione(cliente_id: str, user_id: str = Depends(get_current_use
 
 
 @router.get("/admin/provvigioni")
-def elenco_provvigioni(user_id: str = Depends(get_current_user)):
-    """[ADMIN] Tutte le provvigioni, dalla più recente."""
+def elenco_provvigioni(
+    agente_id: str = "",
+    cliente_id: str = "",
+    stato: str = "",
+    user_id: str = Depends(get_current_user),
+):
+    """
+    [ADMIN] Provvigioni con nome agente ed email cliente, dalla più recente.
+
+    Senza l'arricchimento la tabella mostrerebbe solo UUID: inutilizzabile per
+    capire chi ha comprato cosa e a quale agente spetta il compenso.
+    I filtri sono opzionali e si combinano fra loro.
+    """
     _verifica_admin(user_id)
-    r = (supabase.table("provvigioni").select("*")
-         .order("created_at", desc=True).limit(200).execute())
-    return r.data or []
+
+    try:
+        q = supabase.table("provvigioni").select("*")
+        if agente_id:
+            q = q.eq("agente_id", agente_id)
+        if cliente_id:
+            q = q.eq("user_id", cliente_id)
+        if stato:
+            q = q.eq("stato", stato)
+        righe = q.order("created_at", desc=True).limit(500).execute().data or []
+        if not righe:
+            return []
+
+        agenti = {a["id"]: a for a in
+                  (supabase.table("agenti").select("id,nome,codice").execute().data or [])}
+
+        # L'email puo' non essere replicata in profiles: in quel caso l'unica
+        # fonte e' auth.users, gia' interrogata da _mappa_email_utenti.
+        profili = {str(p["id"]): p for p in
+                   (supabase.table("profiles").select("*").execute().data or [])}
+        serve_auth = any(not profili.get(str(r["user_id"]), {}).get("email") for r in righe)
+        da_auth = _mappa_email_utenti() if serve_auth else {}
+
+        for r in righe:
+            ag = agenti.get(r.get("agente_id")) or {}
+            r["agente_nome"] = ag.get("nome")
+            r["agente_codice"] = ag.get("codice")
+            pid = str(r.get("user_id"))
+            email_auth, _ = da_auth.get(pid, (None, None))
+            r["cliente_email"] = (profili.get(pid) or {}).get("email") or email_auth
+        return righe
+    except Exception as e:
+        logger.error("Elenco provvigioni fallito: %s: %s", type(e).__name__, e)
+        raise HTTPException(status_code=500, detail="Elenco provvigioni non disponibile.")
+
+
+@router.post("/admin/provvigioni/{provvigione_id}/annulla")
+def annulla_provvigione(provvigione_id: str, user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Annulla una provvigione (ordine rimborsato, test, errore).
+
+    Non si elimina la riga: resta a storico con stato 'annullata', perche' e'
+    un documento contabile. Una provvigione gia' liquidata NON si annulla:
+    il denaro e' uscito, va gestito con una nota di credito.
+    """
+    _verifica_admin(user_id)
+    r = (supabase.table("provvigioni")
+         .update({"stato": "annullata"})
+         .eq("id", provvigione_id).eq("stato", "maturata").execute())
+    if not r.data:
+        raise HTTPException(
+            status_code=400,
+            detail="Provvigione inesistente, già liquidata o già annullata.",
+        )
+    logger.info("Provvigione %s annullata dall'admin %s.", provvigione_id, user_id)
+    return {"status": "annullata"}
 
 
 @router.post("/admin/provvigioni/{provvigione_id}/liquida")
