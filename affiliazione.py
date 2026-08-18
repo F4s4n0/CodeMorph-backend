@@ -83,6 +83,27 @@ def attribuisci_agente(dati: InputAttribuzione, user_id: str = Depends(get_curre
         raise HTTPException(status_code=500, detail="Attribuzione non riuscita.")
 
 
+def _email_offuscata(email):
+    """
+    Email ridotta per l'agente: `ga…re@azienda.it`.
+
+    L'agente NON deve ricevere il recapito dei clienti: dopo la segnalazione
+    il cliente e' un contatto della piattaforma, e trasmettergli l'indirizzo
+    completo sarebbe una comunicazione di dato personale a un terzo senza
+    base giuridica. Restano i due caratteri iniziali e finali, quanto basta
+    perche' l'agente riconosca un'azienda che ha segnalato lui.
+    """
+    if not email or "@" not in str(email):
+        return None
+    locale, _, dominio = str(email).partition("@")
+    if len(locale) <= 4:
+        # Troppo corto per mascherare in modo utile: si tiene solo l'iniziale.
+        locale_mascherato = (locale[:1] or "?") + "…"
+    else:
+        locale_mascherato = f"{locale[:2]}…{locale[-2:]}"
+    return f"{locale_mascherato}@{dominio}"
+
+
 def _agente_del_chiamante(user_id):
     """
     Riga `agenti` collegata a chi sta chiamando, o 404.
@@ -128,7 +149,7 @@ def mio_riepilogo(user_id: str = Depends(get_current_user)):
                     d = d.replace(tzinfo=timezone.utc)
                 giorni = 365 - (adesso - d).days
             clienti.append({
-                "email": p.get("email"),
+                "email": _email_offuscata(p.get("email")),
                 "attribuito_at": attribuito,
                 "giorni_residui": giorni,
                 "ordini": len(mie),
