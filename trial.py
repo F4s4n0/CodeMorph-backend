@@ -11,7 +11,6 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 
 from crewai import Crew, Process, Task
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,6 +22,7 @@ from src.agents import create_agents
 from src.config import MODELLO_PREDEFINITO
 from src.llm_config import get_llm
 from zoneinfo import ZoneInfo
+from src.config import MODELLO_PREDEFINITO, WORKSPACE_DIR
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/trial")
@@ -35,7 +35,7 @@ MAX_CARATTERI = 10_000  # 50 righe non possono valere 10k caratteri l'una
 TRIAL_PROVIDER = os.getenv("TRIAL_PROVIDER", "anthropic")
 TRIAL_MODEL = os.getenv("TRIAL_MODEL", MODELLO_PREDEFINITO)
 
-WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", "/tmp/workspace_sessioni"))
+
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 FUSO_ROMA = ZoneInfo("Europe/Rome")
@@ -96,12 +96,16 @@ def logs_trial(user_id: str = Depends(get_current_user)):
 
 def _ha_licenza_attiva(user_id):
     """True se l'utente ha un pass ancora valido: in quel caso niente trial."""
+    # Passa dalla cache di auth.py: questo endpoint viene interrogato in
+    # polling e una query per giro satura le connessioni sotto carico LLM.
+    from auth import get_current_user_and_validate_license
     try:
-        r = (supabase.table("user_licenses").select("expires_at")
-             .eq("user_id", user_id).order("expires_at", desc=True).limit(1).execute())
-        if not r.data:
-            return False
-        return _parse_expiry(r.data[0]["expires_at"]) > datetime.now(timezone.utc)
+        get_current_user_and_validate_license(user_id)
+        return True
+    except HTTPException as e:
+        if e.status_code == 402:
+            return False          # licenza assente o scaduta: trial possibile
+        raise                     # 503: il DB non risponde, non decidere
     except Exception as e:
         logger.warning("Verifica licenza per trial fallita (%s): %s", user_id, e)
         return False
@@ -118,8 +122,12 @@ def stato_trial(user_id: str = Depends(get_current_user)):
     try:
         r = supabase.table("trial_bonuses").select("used_at").eq("user_id", user_id).execute()
     except Exception as e:
-        logger.error("Lettura trial fallita per %s: %s", user_id, e)
-        raise HTTPException(status_code=503, detail="Servizio non disponibile.")
+        # Un errore temporaneo non deve mostrare un guasto all'utente: il
+        # bonus resta comunque protetto dall'update atomico in /esegui.
+        logger.warning("Lettura trial non riuscita per %s (%s): stato sconosciuto.",
+                       user_id, type(e).__name__)
+        return {"concesso": False, "disponibile": False, "usato": False,
+                "licenza_attiva": licenza_attiva, "stato_sconosciuto": True}
     if not r.data:
         return {"concesso": False, "disponibile": False, "usato": False, "licenza_attiva": licenza_attiva}
     usato = r.data[0]["used_at"] is not None

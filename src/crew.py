@@ -880,6 +880,47 @@ def run_implementation_phase(
     return esiti
 
 
+def _estratto_per_validatore(contenuto, max_char):
+    """
+    Riduce un documento per il Quality Gate SENZA farlo sembrare difettoso.
+
+    Tagliare a carattere fisso spezza i blocchi di codice a meta': il validatore
+    vede un ```csharp mai chiuso e segnala il documento come "troncato e non
+    compilabile" — un difetto che esiste solo nel suo input, non su disco.
+    E' successo davvero: un backend da 68k e' stato bocciato per un troncamento
+    prodotto dal troncamento stesso.
+
+    Qui il taglio cade sull'ultima chiusura di blocco utile, e l'avviso e'
+    ripetuto IN TESTA oltre che in coda: in fondo a decine di migliaia di
+    caratteri di codice una nota finale non regge contro l'evidenza visiva
+    di una sintassi interrotta.
+    """
+    if not contenuto or len(contenuto) <= max_char:
+        return contenuto
+
+    testa = contenuto[:max_char]
+
+    # Ultimo blocco di codice COMPLETO: si taglia li', mai a meta' listato.
+    chiusure = [m.end() for m in re.finditer(r"(?m)^```\s*$", testa)]
+    if chiusure and chiusure[-1] > max_char * 0.5:
+        testa = testa[:chiusure[-1]]
+    else:
+        # Nessun blocco: si ripiega sull'ultimo paragrafo intero.
+        ultimo = testa.rfind("\n\n")
+        if ultimo > max_char * 0.5:
+            testa = testa[:ultimo]
+
+    avviso = (
+        "> ATTENZIONE AL VALIDATORE: quello che segue e' un ESTRATTO PARZIALE.\n"
+        "> Il documento su disco e' COMPLETO e integro: la parte non riportata\n"
+        "> e' stata omessa solo per limiti di contesto di questa validazione.\n"
+        "> NON segnalare il documento come troncato, incompleto o non\n"
+        "> compilabile: sarebbe un rilievo sul mio estratto, non sul deliverable.\n\n"
+    )
+    coda = "\n\n[...fine dell'estratto. Il documento originale prosegue ed e' completo su disco.]"
+    return avviso + testa + coda
+
+
 def _valida_fase(llm, output_dir, nome_fase, file_da_validare, nome_report,
                  session_id=None, tracker=None):
     """
@@ -896,12 +937,7 @@ def _valida_fase(llm, output_dir, nome_fase, file_da_validare, nome_report,
         # Quota EQUA per documento: senza questo il primo documento lungo
         # consuma tutto il budget e gli altri non arrivano affatto al gate,
         # che li segnala come "mancanti" pur essendo completi su disco.
-        if len(contenuto) > VALIDAZIONE_MAX_CHARS_PER_DOC:
-            contenuto = (
-                contenuto[:VALIDAZIONE_MAX_CHARS_PER_DOC]
-                + "\n\n[...estratto interrotto qui per limiti di contesto del validatore: "
-                  "il documento originale prosegue ed è completo...]"
-            )
+        contenuto = _estratto_per_validatore(contenuto, VALIDAZIONE_MAX_CHARS_PER_DOC)
         documenti.append(f"### {nome}\n{contenuto}")
 
     if not documenti:
@@ -910,7 +946,7 @@ def _valida_fase(llm, output_dir, nome_fase, file_da_validare, nome_report,
 
     contenuto_fase = "\n\n".join(documenti)
     if len(contenuto_fase) > VALIDAZIONE_MAX_CHARS:
-        contenuto_fase = contenuto_fase[:VALIDAZIONE_MAX_CHARS] + "\n\n[...contenuto troncato per limiti di contesto...]"
+        contenuto_fase = _estratto_per_validatore(contenuto_fase, VALIDAZIONE_MAX_CHARS)
 
     agents = create_agents(llm)
     tasks = get_validation_task(

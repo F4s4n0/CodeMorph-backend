@@ -43,7 +43,10 @@ FILE_VALIDATION_FASE3 = "10_Validation_Report_Fase3.md"
 VALIDAZIONE_MAX_CHARS = 250_000
 # Quota massima per singolo documento: garantisce che ognuno sia
 # rappresentato, invece di consumare tutto il budget sul primo.
-VALIDAZIONE_MAX_CHARS_PER_DOC = 45_000
+# 45k era troppo stretta: un backend da 68k arrivava al validatore tagliato
+# a meta' listato, e il gate bocciava il documento per un troncamento
+# prodotto dal troncamento stesso.
+VALIDAZIONE_MAX_CHARS_PER_DOC = 80_000
 # Pausa tra l'analisi di un file e il successivo. Serve a non saturare i
 # limiti per minuto del provider su progetti con molti file.
 # 0 = nessuna pausa (progetti piccoli), 1-2s = prudente su progetti grandi.
