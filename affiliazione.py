@@ -243,6 +243,39 @@ def registra_provvigione(user_id, order_id, importo_ordine_eur):
 import re
 
 
+def _normalizza_iban(iban):
+    """
+    IBAN ripulito e verificato, o None se vuoto.
+
+    Il controllo mod-97 (ISO 13616) intercetta refusi e cifre invertite: un
+    IBAN sbagliato significa un bonifico rifiutato o, peggio, inviato a un
+    altro conto. Vale la pena bloccarlo in inserimento invece di scoprirlo
+    al momento del pagamento.
+    """
+    if not iban:
+        return None
+    pulito = re.sub(r"\s", "", str(iban)).upper()
+    if not pulito:
+        return None
+
+    if not re.fullmatch(r"[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}", pulito):
+        raise HTTPException(
+            status_code=400,
+            detail="IBAN non valido: deve iniziare con due lettere del paese, due cifre di controllo e proseguire con lettere o numeri.",
+        )
+
+    # mod-97: si spostano i primi 4 caratteri in coda e le lettere diventano
+    # numeri (A=10 ... Z=35); il resto della divisione per 97 deve dare 1.
+    riordinato = pulito[4:] + pulito[:4]
+    numerico = "".join(str(int(c, 36)) for c in riordinato)
+    if int(numerico) % 97 != 1:
+        raise HTTPException(
+            status_code=400,
+            detail="IBAN non valido: le cifre di controllo non corrispondono. Verifica di averlo copiato correttamente.",
+        )
+    return pulito
+
+
 class InputAgente(BaseModel):
     nome: str
     email: str = ""               # ricavata dall'account se si passa user_id
@@ -250,6 +283,7 @@ class InputAgente(BaseModel):
     codice: str = ""              # se vuoto viene generato dal nome
     percentuale: float = 30.0
     partita_iva: str = ""
+    iban: str = ""                # conto su cui liquidare le provvigioni
     note: str = ""
 
 
@@ -317,28 +351,30 @@ def utenti_selezionabili(user_id: str = Depends(get_current_user)):
     _verifica_admin(user_id)
 
     try:
-        profili = (supabase.table("profiles").select("id,email,role,created_at")
-                   .order("created_at", desc=True).execute().data or [])
-        gia_agenti = {a.get("user_id") for a in
+        # select("*") e non un elenco di colonne: se una di queste non esiste
+        # nello schema, Supabase risponde con un errore e l'elenco arriva vuoto
+        # al frontend, che mostra "nessun account" invece del guasto reale.
+        profili = (supabase.table("profiles").select("*").execute().data or [])
+        gia_agenti = {str(a.get("user_id")) for a in
                       (supabase.table("agenti").select("user_id").execute().data or [])
                       if a.get("user_id")}
-        # Chi ha gia' comprato e' un cliente: promuoverlo ad agente creerebbe
-        # un conflitto di ruolo, quindi va segnalato a chi sceglie.
-        clienti = {str(p["id"]) for p in
-                   (supabase.table("profiles").select("id,agente_id")
-                    .not_.is_("agente_id", "null").execute().data or [])}
 
         elenco = []
         for p in profili:
-            pid = str(p["id"])
+            pid = str(p.get("id"))
             if p.get("role") == "admin" or pid in gia_agenti:
                 continue
             elenco.append({
                 "user_id": pid,
                 "email": p.get("email"),
                 "registrato_at": p.get("created_at"),
-                "gia_cliente_di_un_agente": pid in clienti,
+                # Chi e' gia' cliente di un agente crea un conflitto di ruolo:
+                # va segnalato a chi sceglie, non escluso a priori.
+                "gia_cliente_di_un_agente": bool(p.get("agente_id")),
             })
+        elenco.sort(key=lambda u: (u["email"] or "").lower())
+        logger.info("Account selezionabili come agente: %d su %d profili.",
+                    len(elenco), len(profili))
         return elenco
     except Exception as e:
         logger.error("Elenco utenti selezionabili fallito: %s: %s", type(e).__name__, e)
@@ -404,6 +440,7 @@ def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
             "user_id": account or None,
             "percentuale": float(dati.percentuale),
             "partita_iva": (dati.partita_iva or "").strip() or None,
+            "iban": _normalizza_iban(dati.iban),
             "note": (dati.note or "").strip() or None,
             "attivo": True,
         }).execute()
@@ -427,6 +464,34 @@ def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
     except Exception as e:
         logger.error("Creazione agente fallita: %s", e)
         raise HTTPException(status_code=500, detail="Creazione non riuscita.")
+
+
+class InputDatiPagamento(BaseModel):
+    iban: str = ""
+    partita_iva: str = ""
+
+
+@router.post("/admin/agenti/{agente_id}/dati-pagamento")
+def aggiorna_dati_pagamento(agente_id: str, dati: InputDatiPagamento,
+                            user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Aggiorna IBAN e partita IVA di un agente.
+
+    Sono dati che cambiano nel tempo (cambio banca, apertura partita IVA) e
+    devono poter essere corretti senza ricreare l'agente, che invaliderebbe
+    il codice e quindi tutti i link gia' distribuiti.
+    """
+    _verifica_admin(user_id)
+
+    aggiornamento = {
+        "iban": _normalizza_iban(dati.iban),
+        "partita_iva": (dati.partita_iva or "").strip() or None,
+    }
+    r = supabase.table("agenti").update(aggiornamento).eq("id", agente_id).execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail="Agente non trovato.")
+    logger.info("Dati di pagamento aggiornati per l'agente %s.", agente_id)
+    return {"status": "aggiornato"}
 
 
 @router.post("/admin/agenti/{agente_id}/stato")
@@ -663,6 +728,20 @@ def annulla_provvigione(provvigione_id: str, user_id: str = Depends(get_current_
 def liquida_provvigione(provvigione_id: str, user_id: str = Depends(get_current_user)):
     """[ADMIN] Segna una provvigione come pagata all'agente."""
     _verifica_admin(user_id)
+
+    # Senza IBAN il bonifico non e' stato fatto: segnare "liquidata" creerebbe
+    # una discrepanza fra quanto risulta pagato e quanto e' uscito davvero.
+    p = (supabase.table("provvigioni").select("agente_id")
+         .eq("id", provvigione_id).limit(1).execute())
+    if p.data:
+        a = (supabase.table("agenti").select("iban,nome")
+             .eq("id", p.data[0]["agente_id"]).limit(1).execute())
+        if a.data and not a.data[0].get("iban"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Manca l'IBAN di {a.data[0].get('nome')}: inseriscilo prima di registrare il pagamento.",
+            )
+
     r = (supabase.table("provvigioni")
          .update({"stato": "liquidata", "liquidata_at": datetime.now(timezone.utc).isoformat()})
          .eq("id", provvigione_id).eq("stato", "maturata").execute())
