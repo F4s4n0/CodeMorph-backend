@@ -240,6 +240,51 @@ def esegui_trial(richiesta: InputTrial, user_id: str = Depends(get_current_user)
         )
 
 
+@router.get("/admin/elenco")
+def elenco_trial(user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Stato della prova gratuita per tutti gli account che ce l'hanno.
+
+    Una chiamata sola per l'intera tabella utenti: interrogare lo stato per
+    ogni riga significherebbe una query per utente a ogni apertura del pannello.
+    """
+    _verifica_admin(user_id)
+    try:
+        r = (supabase.table("trial_bonuses")
+             .select("user_id,granted_at,used_at,righe_codice").execute())
+        return r.data or []
+    except Exception as e:
+        logger.error("Elenco prove gratuite fallito: %s: %s", type(e).__name__, e)
+        raise HTTPException(status_code=500, detail="Elenco prove non disponibile.")
+
+
+@router.delete("/admin/{destinatario_id}/revoca")
+def revoca_trial(destinatario_id: str, user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Toglie la prova gratuita a un account che non l'ha ancora usata.
+
+    Una prova GIA' USATA non si revoca: la riga documenta un'elaborazione
+    realmente avvenuta a spese della piattaforma. Per riabilitare quel caso
+    si usa 'concedi', che azzera used_at.
+    """
+    _verifica_admin(user_id)
+    try:
+        r = (supabase.table("trial_bonuses").delete()
+             .eq("user_id", destinatario_id).is_("used_at", "null").execute())
+        if not r.data:
+            raise HTTPException(
+                status_code=400,
+                detail="Prova inesistente o già utilizzata: in quel caso puoi solo riconcederla.",
+            )
+        logger.info("Prova gratuita revocata a %s dall'admin %s.", destinatario_id, user_id)
+        return {"status": "revocata"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Revoca trial fallita per %s: %s", destinatario_id, e)
+        raise HTTPException(status_code=500, detail="Revoca non riuscita.")
+
+
 @router.post("/admin/{destinatario_id}/concedi")
 def concedi_trial(destinatario_id: str, user_id: str = Depends(get_current_user)):
     """[ADMIN] Concede (o ri-concede, azzerando l'uso) il bonus a un account."""
