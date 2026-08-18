@@ -83,6 +83,84 @@ def attribuisci_agente(dati: InputAttribuzione, user_id: str = Depends(get_curre
         raise HTTPException(status_code=500, detail="Attribuzione non riuscita.")
 
 
+def _agente_del_chiamante(user_id):
+    """
+    Riga `agenti` collegata a chi sta chiamando, o 404.
+
+    E' il perno del pannello agente: ogni endpoint filtra su QUESTO id, mai su
+    un parametro ricevuto dal client. Cosi' un agente non puo' leggere i dati
+    di un altro cambiando un valore nella richiesta.
+    """
+    r = (supabase.table("agenti").select("id,nome,codice,percentuale,attivo")
+         .eq("user_id", user_id).limit(1).execute())
+    if not r.data:
+        raise HTTPException(status_code=403, detail="Questo account non è collegato a nessun agente.")
+    return r.data[0]
+
+
+@router.get("/mio-riepilogo")
+def mio_riepilogo(user_id: str = Depends(get_current_user)):
+    """
+    [AGENTE] Il proprio riepilogo: clienti segnalati e compensi.
+
+    Sola lettura. L'agente NON vede i progetti dei clienti, il codice caricato
+    o i loro consumi, e non puo' liquidare le proprie provvigioni.
+    """
+    ag = _agente_del_chiamante(user_id)
+
+    try:
+        prov = (supabase.table("provvigioni")
+                .select("user_id,importo_ordine_eur,importo_eur,percentuale,stato,created_at,liquidata_at")
+                .eq("agente_id", ag["id"]).order("created_at", desc=True).execute().data or [])
+        profili = (supabase.table("profiles").select("id,email,agente_attribuito_at")
+                   .eq("agente_id", ag["id"]).execute().data or [])
+
+        adesso = datetime.now(timezone.utc)
+        clienti = []
+        for p in profili:
+            pid = str(p["id"])
+            mie = [x for x in prov if str(x["user_id"]) == pid]
+            giorni = None
+            attribuito = p.get("agente_attribuito_at")
+            if attribuito:
+                d = datetime.fromisoformat(str(attribuito).replace("Z", "+00:00"))
+                if d.tzinfo is None:
+                    d = d.replace(tzinfo=timezone.utc)
+                giorni = 365 - (adesso - d).days
+            clienti.append({
+                "email": p.get("email"),
+                "attribuito_at": attribuito,
+                "giorni_residui": giorni,
+                "ordini": len(mie),
+                "acquistato_eur": round(sum(float(x.get("importo_ordine_eur") or 0) for x in mie), 2),
+                "compenso_eur": round(sum(float(x["importo_eur"]) for x in mie
+                                          if x["stato"] in ("maturata", "liquidata")), 2),
+            })
+        clienti.sort(key=lambda c: -c["acquistato_eur"])
+
+        # Le righe annullate NON entrano nei totali: sono ordini rimborsati
+        # o registrazioni di prova.
+        return {
+            "agente": {"nome": ag["nome"], "codice": ag["codice"],
+                       "percentuale": ag["percentuale"], "attivo": ag["attivo"]},
+            "clienti": clienti,
+            "movimenti": [
+                {k: m.get(k) for k in
+                 ("importo_ordine_eur", "importo_eur", "percentuale", "stato", "created_at", "liquidata_at")}
+                for m in prov
+            ],
+            "da_liquidare_eur": round(sum(float(m["importo_eur"]) for m in prov
+                                          if m["stato"] == "maturata"), 2),
+            "liquidato_eur": round(sum(float(m["importo_eur"]) for m in prov
+                                       if m["stato"] == "liquidata"), 2),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Riepilogo agente fallito per %s: %s: %s", user_id, type(e).__name__, e)
+        raise HTTPException(status_code=500, detail="Riepilogo non disponibile.")
+
+
 def registra_provvigione(user_id, order_id, importo_ordine_eur):
     """
     Da chiamare quando un ordine viene EROGATO (non quando viene creato).
@@ -146,7 +224,8 @@ import re
 
 class InputAgente(BaseModel):
     nome: str
-    email: str
+    email: str = ""               # ricavata dall'account se si passa user_id
+    user_id: str = ""             # account registrato da promuovere ad agente
     codice: str = ""              # se vuoto viene generato dal nome
     percentuale: float = 30.0
     partita_iva: str = ""
@@ -205,6 +284,46 @@ def elimina_agente(agente_id: str, user_id: str = Depends(get_current_user)):
         logger.error("Eliminazione agente %s fallita: %s", agente_id, e)
         raise HTTPException(status_code=500, detail="Eliminazione non riuscita.")
 
+@router.get("/admin/utenti-selezionabili")
+def utenti_selezionabili(user_id: str = Depends(get_current_user)):
+    """
+    [ADMIN] Account registrati che possono diventare agenti.
+
+    L'agente deve prima registrarsi normalmente sulla piattaforma: qui si
+    sceglie il suo account e lo si promuove. Sono esclusi gli admin e chi e'
+    gia' collegato a un agente, cosi' l'elenco mostra solo scelte valide.
+    """
+    _verifica_admin(user_id)
+
+    try:
+        profili = (supabase.table("profiles").select("id,email,role,created_at")
+                   .order("created_at", desc=True).execute().data or [])
+        gia_agenti = {a.get("user_id") for a in
+                      (supabase.table("agenti").select("user_id").execute().data or [])
+                      if a.get("user_id")}
+        # Chi ha gia' comprato e' un cliente: promuoverlo ad agente creerebbe
+        # un conflitto di ruolo, quindi va segnalato a chi sceglie.
+        clienti = {str(p["id"]) for p in
+                   (supabase.table("profiles").select("id,agente_id")
+                    .not_.is_("agente_id", "null").execute().data or [])}
+
+        elenco = []
+        for p in profili:
+            pid = str(p["id"])
+            if p.get("role") == "admin" or pid in gia_agenti:
+                continue
+            elenco.append({
+                "user_id": pid,
+                "email": p.get("email"),
+                "registrato_at": p.get("created_at"),
+                "gia_cliente_di_un_agente": pid in clienti,
+            })
+        return elenco
+    except Exception as e:
+        logger.error("Elenco utenti selezionabili fallito: %s: %s", type(e).__name__, e)
+        raise HTTPException(status_code=500, detail="Elenco utenti non disponibile.")
+
+
 @router.post("/admin/agenti")
 def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
     """
@@ -217,6 +336,27 @@ def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
 
     nome = (dati.nome or "").strip()
     email = (dati.email or "").strip().lower()
+    account = (dati.user_id or "").strip()
+
+    # L'agente deve avere un account: e' cosi' che accede al proprio riepilogo.
+    # L'email si ricava dal profilo, non da quanto digitato: evita il caso in
+    # cui l'agente riceva il link su un indirizzo e acceda con un altro.
+    if account:
+        p = (supabase.table("profiles").select("id,email,role")
+             .eq("id", account).limit(1).execute())
+        if not p.data:
+            raise HTTPException(status_code=400, detail="Account selezionato inesistente.")
+        if p.data[0].get("role") == "admin":
+            raise HTTPException(status_code=400, detail="Un account admin non può essere reso agente.")
+        gia = (supabase.table("agenti").select("id,nome")
+               .eq("user_id", account).limit(1).execute())
+        if gia.data:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Questo account è già collegato all'agente '{gia.data[0].get('nome')}'.",
+            )
+        email = (p.data[0].get("email") or email).strip().lower()
+
     if len(nome) < 3:
         raise HTTPException(status_code=400, detail="Indica il nome completo dell'agente.")
     if "@" not in email:
@@ -240,12 +380,26 @@ def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
             "codice": codice,
             "nome": nome,
             "email": email,
+            "user_id": account or None,
             "percentuale": float(dati.percentuale),
             "partita_iva": (dati.partita_iva or "").strip() or None,
             "note": (dati.note or "").strip() or None,
             "attivo": True,
         }).execute()
-        logger.info("Agente '%s' creato con codice %s.", nome, codice)
+
+        if account:
+            # Il ruolo abilita il pannello agente. Non tocca l'attribuzione
+            # come cliente: se ha gia' acquistato, quegli ordini restano suoi.
+            try:
+                supabase.table("profiles").update({"role": "agente"}).eq("id", account).execute()
+            except Exception as e:
+                # L'agente e' creato: senza il ruolo non vedra' il proprio
+                # pannello, ma il compenso matura lo stesso. Va sistemato a mano.
+                logger.error("Ruolo 'agente' non assegnato a %s (%s): assegnarlo manualmente.",
+                             account, type(e).__name__)
+
+        logger.info("Agente '%s' creato con codice %s (account: %s).",
+                    nome, codice, account or "nessuno")
         return r.data[0] if r.data else {"codice": codice}
     except HTTPException:
         raise
