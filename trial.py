@@ -287,14 +287,30 @@ def revoca_trial(destinatario_id: str, user_id: str = Depends(get_current_user))
 
 @router.post("/admin/{destinatario_id}/concedi")
 def concedi_trial(destinatario_id: str, user_id: str = Depends(get_current_user)):
-    """[ADMIN] Concede (o ri-concede, azzerando l'uso) il bonus a un account."""
+    """
+    [ADMIN] Concede (o ri-concede, azzerando l'uso) il bonus a un account.
+
+    Restituisce la RIGA scritta, non solo un esito: il pannello la usa per
+    aggiornare lo stato senza dover rileggere l'elenco. Un secondo giro di
+    lettura subito dopo la scrittura puo' non vedere ancora il dato, e
+    l'interfaccia resterebbe indietro di un clic.
+    """
     _verifica_admin(user_id)
     try:
-        supabase.table("trial_bonuses").upsert({
-            "user_id": destinatario_id, "granted_by": user_id,
-            "granted_at": datetime.now(timezone.utc).isoformat(), "used_at": None,
-        }).execute()
-        return {"status": "success", "messaggio": "Bonus prova concesso."}
+        riga = {
+            "user_id": destinatario_id,
+            "granted_by": user_id,
+            "granted_at": datetime.now(timezone.utc).isoformat(),
+            "used_at": None,
+        }
+        # on_conflict esplicito: senza, la risoluzione avviene sulla chiave
+        # primaria e una seconda concessione allo stesso utente puo' fallire
+        # o duplicare la riga invece di aggiornarla.
+        r = supabase.table("trial_bonuses").upsert(riga, on_conflict="user_id").execute()
+        salvata = (r.data or [riga])[0]
+        logger.info("Prova gratuita concessa a %s dall'admin %s.", destinatario_id, user_id)
+        return {"status": "success", "messaggio": "Bonus prova concesso.", "prova": salvata}
     except Exception as e:
-        logger.error("Concessione trial fallita per %s: %s", destinatario_id, e)
+        logger.error("Concessione trial fallita per %s: %s: %s",
+                     destinatario_id, type(e).__name__, e)
         raise HTTPException(status_code=500, detail="Concessione non riuscita.")
