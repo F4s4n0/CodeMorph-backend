@@ -47,13 +47,20 @@ _REGOLE = [
     # URL con credenziali incorporate: schema://utente:password@host
     (re.compile(r"(://[^\s:/@]+:)([^\s@]{3,})(@)"),
      "credenziali nell'URL"),
-    # Valore fra backtick vicino a una parola-chiave di credenziale, sulla
-    # stessa riga. E' la forma con cui gli agenti espongono i segreti nelle
+    # Valore fra backtick SUBITO DOPO una parola-chiave di credenziale, con al
+    # massimo un separatore in mezzo (`:`, `=`, `|`, spazi). E' la forma delle
     # TABELLE markdown dell'inventario:
     #   | **Password SQL** | `valorevero` | CheckDB.cs | CRITICO |
+    #
+    # La finestra e' STRETTA di proposito. Con 80 caratteri liberi la regola
+    # agganciava il primo backtick di una frase discorsiva: da
+    # "Credenziali cablate: l'utenza `helpdesk` e la password (`...`)" spariva
+    # lo username, e da "le credenziali ... tramite il pattern `IOptions`"
+    # spariva il nome del pattern, rendendo la frase incomprensibile.
     (re.compile(r"((?:password|passwd|pwd|secret|api[_-]?key|apikey|token|"
-                r"credenzial\w*|chiave)[^\n`]{0,80}?`)([^`\n]{3,})(`)", re.IGNORECASE),
-     "valore fra backtick accanto a parola-chiave di credenziale"),
+                r"chiave)\s*(?:sql|db|database|di\s+accesso)?\s*[:=|*\s]{0,6}`)"
+                r"([^`\n]{3,})(`)", re.IGNORECASE),
+     "valore fra backtick subito dopo una parola-chiave di credenziale"),
 ]
 
 # Valori che NON sono segreti veri: mascherarli renderebbe il documento
