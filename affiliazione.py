@@ -164,6 +164,7 @@ def mio_riepilogo(user_id: str = Depends(get_current_user)):
         return {
             "agente": {"nome": ag["nome"], "codice": ag["codice"],
                        "percentuale": ag["percentuale"], "attivo": ag["attivo"]},
+            "fatturazione": _dati_fatturazione(user_id),
             "clienti": clienti,
             "movimenti": [
                 {k: m.get(k) for k in
@@ -243,9 +244,54 @@ def registra_provvigione(user_id, order_id, importo_ordine_eur):
 import re
 
 
-def _normalizza_iban(iban):
+def _dati_fatturazione(user_id):
     """
-    IBAN ripulito e verificato, o None se vuoto.
+    Profilo di fatturazione dell'account, con lo stato di completezza.
+
+    I dati NON vivono sulla riga agente: sono gli stessi che l'utente compila
+    nella sezione Abbonamento, e duplicarli creerebbe due verita' che prima o
+    poi divergono. Qui si legge da billing_profiles e si dice cosa manca per
+    poter liquidare un compenso.
+    """
+    vuoto = {"presente": False, "mancanti": ["profilo di fatturazione"],
+             "liquidabile": False}
+    if not user_id:
+        return vuoto
+    try:
+        r = (supabase.table("billing_profiles").select("*")
+             .eq("user_id", user_id).limit(1).execute())
+    except Exception as e:
+        logger.warning("Profilo fatturazione non leggibile per %s: %s", user_id, type(e).__name__)
+        return vuoto
+    if not r.data:
+        return vuoto
+
+    p = r.data[0]
+    mancanti = []
+    if not p.get("ragione_sociale"):
+        mancanti.append("ragione sociale")
+    if not p.get("partita_iva"):
+        mancanti.append("partita IVA")
+    if not p.get("iban"):
+        mancanti.append("IBAN")
+
+    return {
+        "presente": True,
+        "ragione_sociale": p.get("ragione_sociale"),
+        "partita_iva": p.get("partita_iva"),
+        "iban": p.get("iban"),
+        "codice_sdi": p.get("codice_sdi"),
+        "pec": p.get("pec"),
+        "mancanti": mancanti,
+        "liquidabile": not mancanti,
+    }
+
+
+def normalizza_iban(iban):
+    """
+    IBAN ripulito e verificato, o None se vuoto. Importata da payments.py:
+    l'IBAN si inserisce nel profilo di fatturazione, la validazione vive qui
+    per non duplicarla.
 
     Il controllo mod-97 (ISO 13616) intercetta refusi e cifre invertite: un
     IBAN sbagliato significa un bonifico rifiutato o, peggio, inviato a un
@@ -282,8 +328,8 @@ class InputAgente(BaseModel):
     user_id: str = ""             # account registrato da promuovere ad agente
     codice: str = ""              # se vuoto viene generato dal nome
     percentuale: float = 30.0
-    partita_iva: str = ""
-    iban: str = ""                # conto su cui liquidare le provvigioni
+    # P.IVA e IBAN NON si chiedono qui: arrivano dal profilo di fatturazione
+    # dell'account (sezione Abbonamento), unica fonte di verita'.
     note: str = ""
 
 
@@ -439,8 +485,6 @@ def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
             "email": email,
             "user_id": account or None,
             "percentuale": float(dati.percentuale),
-            "partita_iva": (dati.partita_iva or "").strip() or None,
-            "iban": _normalizza_iban(dati.iban),
             "note": (dati.note or "").strip() or None,
             "attivo": True,
         }).execute()
@@ -464,34 +508,6 @@ def crea_agente(dati: InputAgente, user_id: str = Depends(get_current_user)):
     except Exception as e:
         logger.error("Creazione agente fallita: %s", e)
         raise HTTPException(status_code=500, detail="Creazione non riuscita.")
-
-
-class InputDatiPagamento(BaseModel):
-    iban: str = ""
-    partita_iva: str = ""
-
-
-@router.post("/admin/agenti/{agente_id}/dati-pagamento")
-def aggiorna_dati_pagamento(agente_id: str, dati: InputDatiPagamento,
-                            user_id: str = Depends(get_current_user)):
-    """
-    [ADMIN] Aggiorna IBAN e partita IVA di un agente.
-
-    Sono dati che cambiano nel tempo (cambio banca, apertura partita IVA) e
-    devono poter essere corretti senza ricreare l'agente, che invaliderebbe
-    il codice e quindi tutti i link gia' distribuiti.
-    """
-    _verifica_admin(user_id)
-
-    aggiornamento = {
-        "iban": _normalizza_iban(dati.iban),
-        "partita_iva": (dati.partita_iva or "").strip() or None,
-    }
-    r = supabase.table("agenti").update(aggiornamento).eq("id", agente_id).execute()
-    if not r.data:
-        raise HTTPException(status_code=404, detail="Agente non trovato.")
-    logger.info("Dati di pagamento aggiornati per l'agente %s.", agente_id)
-    return {"status": "aggiornato"}
 
 
 @router.post("/admin/agenti/{agente_id}/stato")
@@ -525,6 +541,9 @@ def elenco_agenti(user_id: str = Depends(get_current_user)):
         ag["clienti_paganti"] = len({p["user_id"] for p in mie})
         ag["maturato_eur"] = round(sum(float(p["importo_eur"]) for p in mie if p["stato"] == "maturata"), 2)
         ag["liquidato_eur"] = round(sum(float(p["importo_eur"]) for p in mie if p["stato"] == "liquidata"), 2)
+        # Stato dei dati di fatturazione: serve a sapere PRIMA se si potra'
+        # liquidare, invece di scoprirlo quando si preme il pulsante.
+        ag["fatturazione"] = _dati_fatturazione(ag.get("user_id"))
     return agenti
 
 
@@ -729,18 +748,29 @@ def liquida_provvigione(provvigione_id: str, user_id: str = Depends(get_current_
     """[ADMIN] Segna una provvigione come pagata all'agente."""
     _verifica_admin(user_id)
 
-    # Senza IBAN il bonifico non e' stato fatto: segnare "liquidata" creerebbe
-    # una discrepanza fra quanto risulta pagato e quanto e' uscito davvero.
+    # Senza dati di fatturazione completi il bonifico non e' stato fatto e la
+    # fattura dell'agente non puo' essere emessa: segnare "liquidata"
+    # creerebbe uno scarto fra quanto risulta pagato e quanto e' uscito.
     p = (supabase.table("provvigioni").select("agente_id")
          .eq("id", provvigione_id).limit(1).execute())
     if p.data:
-        a = (supabase.table("agenti").select("iban,nome")
+        a = (supabase.table("agenti").select("nome,user_id")
              .eq("id", p.data[0]["agente_id"]).limit(1).execute())
-        if a.data and not a.data[0].get("iban"):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Manca l'IBAN di {a.data[0].get('nome')}: inseriscilo prima di registrare il pagamento.",
-            )
+        if a.data:
+            nome_agente = a.data[0].get("nome") or "l'agente"
+            if not a.data[0].get("user_id"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{nome_agente} non ha un account collegato: senza profilo di fatturazione non e' possibile liquidare.",
+                )
+            fatt = _dati_fatturazione(a.data[0]["user_id"])
+            if not fatt["liquidabile"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(f"Dati di fatturazione di {nome_agente} incompleti: manca "
+                            f"{', '.join(fatt['mancanti'])}. Deve completarli nella sezione "
+                            "Abbonamento prima di poter ricevere il compenso."),
+                )
 
     r = (supabase.table("provvigioni")
          .update({"stato": "liquidata", "liquidata_at": datetime.now(timezone.utc).isoformat()})

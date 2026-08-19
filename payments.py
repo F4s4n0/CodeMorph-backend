@@ -667,6 +667,9 @@ class InputProfiloFatturazione(BaseModel):
     provincia: str
     codice_sdi: Optional[str] = None
     pec: Optional[str] = None
+    # Opzionale: serve solo a chi RICEVE compensi dalla piattaforma (gli
+    # agenti segnalatori). Un cliente paga e basta, quindi non lo compila.
+    iban: Optional[str] = None
 
 
 # =====================================================================
@@ -1135,6 +1138,13 @@ def salva_profilo_fatturazione(
     if pec and "@" not in pec:
         raise HTTPException(status_code=400, detail="La PEC non è un indirizzo email valido.")
 
+    # L'IBAN e' opzionale, ma se compilato deve essere valido: il controllo
+    # mod-97 intercetta refusi che porterebbero a un bonifico rifiutato o,
+    # peggio, accreditato su un altro conto. La validazione vive in
+    # affiliazione.py per non duplicarla.
+    from affiliazione import normalizza_iban
+    iban = normalizza_iban(dati.iban)
+
     profilo = {
         "user_id": user_id,
         "ragione_sociale": rs,
@@ -1145,6 +1155,7 @@ def salva_profilo_fatturazione(
         "provincia": dati.provincia.strip().upper(),
         "codice_sdi": sdi or None,
         "pec": pec or None,
+        "iban": iban,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
