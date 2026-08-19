@@ -199,6 +199,43 @@ def _nome_progetto(session_id):
     return nome
 
 
+def _intestazione_documento(percorso, nome_progetto=""):
+    """
+    Intestazione standard dei deliverable markdown.
+
+    In Markdown PURO: nessun file esterno referenziato, così il documento
+    resta integro ovunque venga spostato o inviato.
+
+    Estratta da _salva_output_su_disco perché i due file di implementazione
+    (6a e 6b) NON passano di lì: vengono scritti in append, un blocco per ogni
+    file legacy migrato, e senza questa funzione restavano gli unici
+    deliverable senza intestazione.
+    """
+    nome_doc = os.path.splitext(os.path.basename(percorso))[0]
+    nome_doc = nome_doc.split("_", 1)[-1].replace("_", " ")
+    data_oggi = datetime.now(ZoneInfo("Europe/Rome")).strftime("%d/%m/%Y")
+    return (
+        "<div align=\"center\">\n\n"
+        "# ⬢ CodeMorph`.AI`\n\n"
+        "**Piattaforma di modernizzazione di sistemi legacy**\n\n"
+        "</div>\n\n"
+        "---\n\n"
+        f"### {nome_doc}\n\n"
+        f"| | |\n"
+        f"|---|---|\n"
+        # Il nome scelto dal cliente in fase di upload: lo stesso
+        # che vede in "I Miei Progetti" e nel nome dello ZIP.
+        + (f"| **Progetto** | {nome_progetto} |\n" if nome_progetto else "")
+        + f"| **Generato il** | {data_oggi} |\n"
+        f"| **Piattaforma** | CodeMorph.AI — www.codemorph.it |\n"
+        f"| **Natura del documento** | Prodotto da modelli di intelligenza artificiale |\n\n"
+        "> ⚠️ **Validazione richiesta.** Il contenuto di questo documento è generato "
+        "automaticamente e può contenere imprecisioni o omissioni. Prima di ogni "
+        "utilizzo operativo deve essere verificato da personale tecnico qualificato.\n\n"
+        "---\n\n"
+    )
+
+
 def _salva_output_su_disco(tasks, output_dir, nome_progetto=""):
     """
     Scrive esplicitamente l'output di ogni task nella cartella di sessione.
@@ -226,32 +263,7 @@ def _salva_output_su_disco(tasks, output_dir, nome_progetto=""):
                 logger.info("%s: corrette %d anomalie di sintassi Mermaid.",
                             os.path.basename(percorso), n_mermaid)
             if percorso.lower().endswith(".md"):
-                # Intestazione in Markdown PURO: nessun file esterno referenziato,
-                # così il documento resta integro ovunque venga spostato o inviato.
-                nome_doc = os.path.splitext(os.path.basename(percorso))[0]
-                nome_doc = nome_doc.split("_", 1)[-1].replace("_", " ")
-                data_oggi = datetime.now(ZoneInfo("Europe/Rome")).strftime("%d/%m/%Y")
-                intestazione = (
-                    "<div align=\"center\">\n\n"
-                    "# ⬢ CodeMorph`.AI`\n\n"
-                    "**Piattaforma di modernizzazione di sistemi legacy**\n\n"
-                    "</div>\n\n"
-                    "---\n\n"
-                    f"### {nome_doc}\n\n"
-                    f"| | |\n"
-                    f"|---|---|\n"
-                    # Il nome scelto dal cliente in fase di upload: lo stesso
-                    # che vede in "I Miei Progetti" e nel nome dello ZIP.
-                    + (f"| **Progetto** | {nome_progetto} |\n" if nome_progetto else "")
-                    + f"| **Generato il** | {data_oggi} |\n"
-                    f"| **Piattaforma** | CodeMorph.AI — www.codemorph.it |\n"
-                    f"| **Natura del documento** | Prodotto da modelli di intelligenza artificiale |\n\n"
-                    "> ⚠️ **Validazione richiesta.** Il contenuto di questo documento è generato "
-                    "automaticamente e può contenere imprecisioni o omissioni. Prima di ogni "
-                    "utilizzo operativo deve essere verificato da personale tecnico qualificato.\n\n"
-                    "---\n\n"
-                )
-                contenuto = intestazione + contenuto
+                contenuto = _intestazione_documento(percorso, nome_progetto) + contenuto
             os.makedirs(output_dir, exist_ok=True)
             with open(percorso, "w", encoding="utf-8") as f:
                 f.write(contenuto)
@@ -745,9 +757,14 @@ def run_implementation_phase(
     #    da dove eravamo invece di rigenerare (e ripagare) tutto.
     processati = _load_checkpoint(percorso_checkpoint)
     if not processati:
-        # Prima run (o restart pulito): svuota i file finali per evitare duplicati
-        open(percorso_backend, "w", encoding="utf-8").close()
-        open(percorso_frontend, "w", encoding="utf-8").close()
+        # Prima run (o restart pulito): svuota i file finali per evitare duplicati.
+        # I due file di implementazione crescono in APPEND (un blocco per ogni
+        # file legacy migrato), quindi l'intestazione va scritta ORA: aggiungerla
+        # a ogni scrittura la ripeterebbe una volta per file.
+        nome_prog = _nome_progetto(session_id)
+        for percorso in (percorso_backend, percorso_frontend):
+            with open(percorso, "w", encoding="utf-8") as f:
+                f.write(_intestazione_documento(percorso, nome_prog))
     else:
         logger.info(
             "Resume: %d file già processati verranno saltati.", len(processati)
@@ -897,6 +914,16 @@ def run_implementation_phase(
             output_frontend, _p2 = _normalizza_percorsi(output_frontend, registro_cartelle, e_frontend=True)
             if _p1 or _p2:
                 logger.info("%s: normalizzati %d percorsi di file.", nome_file, _p1 + _p2)
+
+            # Rete di sicurezza per il resume: un file scritto da una versione
+            # precedente (o da una run interrotta) puo' esistere senza
+            # intestazione. Si aggiunge qui, una volta sola.
+            for percorso in (percorso_backend, percorso_frontend):
+                if "CodeMorph" not in _read_if_exists(percorso, "")[:400]:
+                    esistente = _read_if_exists(percorso, "")
+                    with open(percorso, "w", encoding="utf-8") as f:
+                        f.write(_intestazione_documento(percorso, _nome_progetto(session_id)))
+                        f.write(esistente)
 
             with open(percorso_backend, "a", encoding="utf-8") as f:
                 f.write(f"\n\n<!-- ===== ORIGINE LEGACY: {nome_file} ===== -->\n\n")
