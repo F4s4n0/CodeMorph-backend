@@ -57,8 +57,31 @@ class InputContatto(BaseModel):
     email: str
     message: str
     origine: Optional[str] = "landing"
+    # Qualificazione: solo l'azienda e' richiesta, il resto aiuta a preparare
+    # la risposta ma non deve trasformare il form in un questionario.
+    azienda: Optional[str] = None
+    ruolo: Optional[str] = None
+    telefono: Optional[str] = None
+    tecnologia_legacy: Optional[str] = None
+    dimensione_progetto: Optional[str] = None
+    motivo: Optional[str] = None
     # Honeypot: campo nascosto via CSS, un umano non lo compila mai
     azienda_extra: Optional[str] = None
+
+
+# Valori ammessi per i campi a scelta chiusa. Il frontend può essere
+# aggirato: qui si scarta silenziosamente ciò che non è previsto, invece di
+# rifiutare la richiesta — un lead non si perde per un valore anomalo.
+_RUOLI = {"titolare", "responsabile_it", "sviluppatore", "consulente", "altro"}
+_TECNOLOGIE = {"visual_foxpro", "vb6", "delphi", "cobol", "rpg", "access",
+               "powerbuilder", "altro", "non_so"}
+_DIMENSIONI = {"piccolo", "medio", "grande", "non_so"}
+_MOTIVI = {"prova_gratuita", "informazioni", "preventivo", "partnership", "supporto"}
+
+
+def _valore_ammesso(valore, ammessi):
+    v = (valore or "").strip().lower()
+    return v if v in ammessi else None
 
 
 @router.post("/api/v1/contatti")
@@ -82,11 +105,17 @@ def crea_richiesta_contatto(dati: InputContatto, request: Request):
     nome = (dati.name or "").strip()
     email = (dati.email or "").strip().lower()
     messaggio = (dati.message or "").strip()
+    azienda = (dati.azienda or "").strip()
+    telefono = (dati.telefono or "").strip()
 
     if len(nome) < 2 or len(nome) > 120:
         raise HTTPException(status_code=400, detail="Indica il tuo nome completo.")
     if not _EMAIL_RE.match(email) or len(email) > 200:
         raise HTTPException(status_code=400, detail="L'indirizzo email non sembra valido.")
+    if len(azienda) < 2 or len(azienda) > 200:
+        raise HTTPException(status_code=400, detail="Indica il nome della tua azienda.")
+    if telefono and len(telefono) > 40:
+        raise HTTPException(status_code=400, detail="Il numero di telefono non sembra valido.")
     if len(messaggio) < 10:
         raise HTTPException(status_code=400, detail="Descrivi la tua richiesta in almeno qualche parola.")
     if len(messaggio) > 5000:
@@ -99,14 +128,21 @@ def crea_richiesta_contatto(dati: InputContatto, request: Request):
             "message": messaggio,
             "status": "nuova",
             "origine": dati.origine or "landing",
+            "azienda": azienda,
+            "telefono": telefono or None,
+            "ruolo": _valore_ammesso(dati.ruolo, _RUOLI),
+            "tecnologia_legacy": _valore_ammesso(dati.tecnologia_legacy, _TECNOLOGIE),
+            "dimensione_progetto": _valore_ammesso(dati.dimensione_progetto, _DIMENSIONI),
+            "motivo": _valore_ammesso(dati.motivo, _MOTIVI) or "informazioni",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
     except Exception as e:
-        logger.error("Salvataggio richiesta di contatto fallito: %s", e)
+        logger.error("Salvataggio richiesta di contatto fallito: %s: %s", type(e).__name__, e)
         raise HTTPException(
             status_code=500,
             detail="Non siamo riusciti a registrare la richiesta: riprova tra poco.",
         )
 
-    logger.info("Nuova richiesta di contatto da %s (%s)", nome, email)
+    logger.info("Nuova richiesta di contatto da %s (%s) — %s, tecnologia: %s",
+                nome, azienda, dati.motivo or "informazioni", dati.tecnologia_legacy or "n.d.")
     return {"status": "success"}
