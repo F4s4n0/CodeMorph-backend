@@ -168,7 +168,38 @@ def _pulisci_output(contenuto):
     logger.warning("Output che inizia con 'Thought:' ma senza confine chiaro: lo lascio intatto.")
     return contenuto
 
-def _salva_output_su_disco(tasks, output_dir):
+_nomi_progetto = {}
+
+
+def _nome_progetto(session_id):
+    """
+    Nome che il cliente ha dato al progetto al momento dell'upload.
+
+    E' lo stesso che vede in "I Miei Progetti", nel selettore in alto e nel
+    nome dello ZIP: metterlo anche nell'intestazione dei documenti chiude il
+    cerchio, e a distanza di mesi permette di capire a quale sistema si
+    riferisce un file trovato in una cartella.
+
+    In cache: viene richiesto una volta per ogni documento salvato.
+    """
+    if not session_id:
+        return ""
+    if session_id in _nomi_progetto:
+        return _nomi_progetto[session_id]
+    nome = ""
+    try:
+        from auth import supabase          # import locale: evita cicli
+        r = (supabase.table("migration_sessions").select("session_name")
+             .eq("id", session_id).limit(1).execute())
+        if r.data:
+            nome = (r.data[0].get("session_name") or "").strip()
+    except Exception as e:
+        logger.warning("Nome progetto non leggibile per %s: %s", session_id, type(e).__name__)
+    _nomi_progetto[session_id] = nome
+    return nome
+
+
+def _salva_output_su_disco(tasks, output_dir, nome_progetto=""):
     """
     Scrive esplicitamente l'output di ogni task nella cartella di sessione.
     ATTENZIONE: non fidarsi di task.output_file per la CARTELLA — le versioni
@@ -209,7 +240,10 @@ def _salva_output_su_disco(tasks, output_dir):
                     f"### {nome_doc}\n\n"
                     f"| | |\n"
                     f"|---|---|\n"
-                    f"| **Generato il** | {data_oggi} |\n"
+                    # Il nome scelto dal cliente in fase di upload: lo stesso
+                    # che vede in "I Miei Progetti" e nel nome dello ZIP.
+                    + (f"| **Progetto** | {nome_progetto} |\n" if nome_progetto else "")
+                    + f"| **Generato il** | {data_oggi} |\n"
                     f"| **Piattaforma** | CodeMorph.AI — www.codemorph.it |\n"
                     f"| **Natura del documento** | Prodotto da modelli di intelligenza artificiale |\n\n"
                     "> ⚠️ **Validazione richiesta.** Il contenuto di questo documento è generato "
@@ -560,7 +594,7 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
 
     annuncia_avvio()
     risultato = crew.kickoff(inputs={"codice_legacy": codice_legacy})
-    _salva_output_su_disco(tasks, output_dir)
+    _salva_output_su_disco(tasks, output_dir, _nome_progetto(session_id))
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
         _salva_consumo_parziale(session_id, tracker)
@@ -651,7 +685,7 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
         "contesto_fase1": contesto_fase1 or "Nessun documento di Fase 1 disponibile.",
         "contesto_sorgenti": contesto_sorgenti,
     })
-    _salva_output_su_disco(tasks, output_dir)
+    _salva_output_su_disco(tasks, output_dir, _nome_progetto(session_id))
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
         _salva_consumo_parziale(session_id, tracker)
@@ -974,7 +1008,7 @@ def run_implementation_phase(
         try:
             annuncia_qa()
             risultato = qa_crew.kickoff()
-            _salva_output_su_disco(qa_tasks, output_dir)
+            _salva_output_su_disco(qa_tasks, output_dir, _nome_progetto(session_id))
             if tracker is not None:
                 tracker.aggiungi_crew(qa_crew, risultato)
                 _salva_consumo_parziale(session_id, tracker)
@@ -1117,7 +1151,7 @@ def _valida_fase(llm, output_dir, nome_fase, file_da_validare, nome_report,
         annuncia()
         # Il contenuto passa da inputs: mai concatenato nella description
         risultato = crew.kickoff(inputs={"contenuto_fase": contenuto_fase})
-        _salva_output_su_disco(tasks, output_dir)
+        _salva_output_su_disco(tasks, output_dir, _nome_progetto(session_id))
         if tracker is not None:
             tracker.aggiungi_crew(crew, risultato)
             _salva_consumo_parziale(session_id, tracker)

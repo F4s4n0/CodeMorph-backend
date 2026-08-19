@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import unicodedata
 import shutil
 import zipfile
 import storage
@@ -99,6 +100,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Senza questo il browser NASCONDE l'header a JavaScript e il frontend non
+    # puo' leggere il nome file scelto dal server: gli ZIP tornerebbero a
+    # chiamarsi tutti "Modernizzazione_Sessione_<uuid>".
+    expose_headers=["Content-Disposition"],
 )
 
 # Endpoint di pagamento e credito token (payments.py)
@@ -973,6 +978,35 @@ def fase3_implement(
 # DOWNLOAD DINAMICO
 # =====================================================================
 
+def _nome_file_zip(session_id, etichetta_fase):
+    """
+    Nome dello ZIP consegnato al cliente, a partire dal nome che ha dato lui
+    al progetto. Un archivio chiamato "Modernizzazione_Sessione_b0e25c52-...zip"
+    e' inservibile nella cartella Download: con dieci progetti non si distingue
+    piu' quale sia quale.
+
+    L'UUID resta in coda, abbreviato: serve a non sovrascrivere due esportazioni
+    con lo stesso nome e a ritrovare la sessione in caso di assistenza.
+    """
+    nome = ""
+    try:
+        r = (supabase.table("migration_sessions").select("session_name")
+             .eq("id", session_id).limit(1).execute())
+        if r.data:
+            nome = (r.data[0].get("session_name") or "").strip()
+    except Exception as e:
+        logger.warning("Nome progetto non leggibile per %s (%s): uso il nome generico.",
+                       session_id, type(e).__name__)
+
+    # Accenti e caratteri non ASCII fuori: alcuni browser e file system li
+    # gestiscono male in Content-Disposition.
+    nome = unicodedata.normalize("NFKD", nome).encode("ascii", "ignore").decode()
+    nome = re.sub(r"[^A-Za-z0-9._-]+", "_", nome).strip("_")[:60]
+    if not nome:
+        nome = "Modernizzazione"
+    return f"{nome}_{etichetta_fase}_{session_id[:8]}.zip"
+
+
 @app.get("/api/v1/modernize/download/{session_id}/{fase}")
 def scarica_file(
     session_id: str,
@@ -995,7 +1029,7 @@ def scarica_file(
     return FileResponse(
         path=str(zip_path),
         media_type="application/zip",
-        filename=f"Modernizzazione_Sessione_{session_id}_{mappa_nomi[fase]}.zip",
+        filename=_nome_file_zip(session_id, mappa_nomi[fase]),
     )
 
 
