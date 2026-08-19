@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_current_user, supabase
+from src.config import PREZZI_TOKEN_EUR_PER_1M
 from payments import _verifica_admin
 
 logger = logging.getLogger(__name__)
@@ -172,3 +173,109 @@ def statistiche(user_id: str = Depends(get_current_user)):
 # su migration_sessions: la Fase 1 misura il sorgente, la Fase 3 conta i
 # rilievi del Quality Check. Richiedono migrazione_metriche.sql.
 # ---------------------------------------------------------------------
+
+
+@router.get("/listino-controllo")
+def controllo_listino(user_id: str = Depends(get_current_user), cambio_usd_eur: float = 0.92):
+    """
+    [ADMIN] Confronta il listino di VENDITA con i costi reali dei provider.
+
+    I prezzi dei modelli cambiano (di norma scendono) e il listino resta
+    fermo: senza un controllo periodico si scopre di essere fuori mercato —
+    o sotto costo — solo dalla fattura. Qui non si cambia NULLA in
+    automatico: un dato di terze parti sbagliato diventerebbe subito un
+    prezzo sbagliato al cliente. Si segnala e si decide a mano.
+
+    La fonte e' il dizionario `model_cost` di LiteLLM, gia' installato come
+    dipendenza. E' mantenuto dalla comunita': puo' essere in ritardo o
+    incompleto, quindi i modelli non trovati vengono dichiarati tali invece
+    di essere confrontati con un valore inventato.
+    """
+    _verifica_admin(user_id)
+
+    try:
+        import litellm
+        costi = getattr(litellm, "model_cost", {}) or {}
+    except Exception as e:
+        logger.warning("Listino di riferimento non disponibile (%s).", type(e).__name__)
+        return {"disponibile": False,
+                "messaggio": "Dati di costo non disponibili in questo ambiente.",
+                "voci": []}
+
+    def _costo_reale(nome_modello):
+        """
+        Costo USD per 1M token, provando le varianti di nome usate da LiteLLM.
+        I nomi non coincidono sempre con i nostri: si tentano i prefissi noti
+        prima di dichiarare il modello non trovato.
+        """
+        candidati = [nome_modello,
+                     f"anthropic/{nome_modello}", f"gemini/{nome_modello}",
+                     f"openai/{nome_modello}", f"vertex_ai/{nome_modello}"]
+        for c in candidati:
+            d = costi.get(c)
+            if d and d.get("input_cost_per_token"):
+                return (float(d["input_cost_per_token"]) * 1_000_000,
+                        float(d.get("output_cost_per_token") or 0) * 1_000_000,
+                        c)
+        return None, None, None
+
+    voci = []
+    for provider, modelli in PREZZI_TOKEN_EUR_PER_1M.items():
+        if provider == "default" or not isinstance(modelli, dict):
+            continue
+        for nome, prezzi in modelli.items():
+            if not isinstance(prezzi, dict):
+                continue
+            vendita_in = float(prezzi.get("prompt") or 0)
+            vendita_out = float(prezzi.get("completion") or 0)
+            costo_in_usd, costo_out_usd, trovato_come = _costo_reale(nome)
+
+            voce = {
+                "provider": provider,
+                "modello": nome,
+                "vendita_prompt_eur": round(vendita_in, 2),
+                "vendita_completion_eur": round(vendita_out, 2),
+            }
+            if costo_in_usd is None:
+                voce.update({
+                    "trovato": False,
+                    "nota": "Modello non presente nei dati di riferimento: verifica il prezzo a mano.",
+                })
+            else:
+                costo_in_eur = costo_in_usd * cambio_usd_eur
+                costo_out_eur = costo_out_usd * cambio_usd_eur
+                # Margine sul completion: e' la voce che pesa di piu' sul
+                # consumo reale, quindi quella su cui vale la pena allarmarsi.
+                margine_in = ((vendita_in / costo_in_eur - 1) * 100) if costo_in_eur else None
+                margine_out = ((vendita_out / costo_out_eur - 1) * 100) if costo_out_eur else None
+                voce.update({
+                    "trovato": True,
+                    "riferimento": trovato_come,
+                    "costo_prompt_eur": round(costo_in_eur, 3),
+                    "costo_completion_eur": round(costo_out_eur, 3),
+                    "margine_prompt_pct": round(margine_in, 1) if margine_in is not None else None,
+                    "margine_completion_pct": round(margine_out, 1) if margine_out is not None else None,
+                    # In perdita, oppure margine talmente alto da far sospettare
+                    # che il costo sia calato e il listino sia rimasto indietro.
+                    "allarme": (
+                        "sotto_costo" if (margine_out is not None and margine_out < 0)
+                        else "margine_anomalo" if (margine_out is not None and margine_out > 100)
+                        else None
+                    ),
+                })
+            voci.append(voce)
+
+    voci.sort(key=lambda v: (v.get("allarme") is None, v["provider"], v["modello"]))
+    return {
+        "disponibile": True,
+        "cambio_usd_eur": cambio_usd_eur,
+        "modelli_totali": len(voci),
+        "non_trovati": sum(1 for v in voci if not v.get("trovato")),
+        "da_verificare": sum(1 for v in voci if v.get("allarme")),
+        "voci": voci,
+        "note": [
+            "I costi provengono dai dati di LiteLLM, mantenuti dalla comunità: "
+            "verificali sul sito del provider prima di modificare il listino.",
+            f"Conversione USD→EUR al cambio {cambio_usd_eur}: aggiornalo se si discosta molto.",
+        ],
+    }
