@@ -162,61 +162,61 @@ RICARICA_MASSIMA_EUR = Decimal("1000.00")
 PREZZI_TOKEN_EUR_PER_1M = {
     "openai": {
         "gpt-5.4": {
-            "prompt": Decimal("2.50"),
-            "completion": Decimal("15.00"),
+            "prompt": Decimal("2.1250"),
+            "completion": Decimal("12.7500"),
         },
         "gpt-5.4-mini": {
-            "prompt": Decimal("0.75"),
-            "completion": Decimal("4.50"),
+            "prompt": Decimal("0.6375"),
+            "completion": Decimal("3.8250"),
         },
         "gpt-5.4-nano": {
-            "prompt": Decimal("0.20"),
-            "completion": Decimal("1.25"),
+            "prompt": Decimal("0.1700"),
+            "completion": Decimal("1.0625"),
         },
         "gpt-5.5": {
-            "prompt": Decimal("5.00"),
-            "completion": Decimal("30.00"),
+            "prompt": Decimal("4.2500"),
+            "completion": Decimal("25.5000"),
         },
     },
     "google": {
         "gemini-3.1-pro-preview": {
-            "prompt": Decimal("2.00"),
-            "completion": Decimal("12.00"),
+            "prompt": Decimal("1.7000"),
+            "completion": Decimal("15.3000"),
         },
         "gemini-3.5-flash": {
-            "prompt": Decimal("1.50"),
-            "completion": Decimal("9.00"),
+            "prompt": Decimal("1.2750"),
+            "completion": Decimal("7.6500"),
         },
         "gemini-3.6-flash": {
-            "prompt": Decimal("1.50"),
-            "completion": Decimal("7.50"),
+            "prompt": Decimal("1.2750"),
+            "completion": Decimal("6.3750"),
         },
     },
     "anthropic": {
-        "claude-haiku-4-5-20251001": {
-            "prompt": Decimal("1.10"),
-            "completion": Decimal("5.50"),
-        },
-        "claude-haiku-4.5": {
-            "prompt": Decimal("1.10"),
-            "completion": Decimal("5.50"),
-        },
-        "claude-sonnet-5": {
-            "prompt": Decimal("3.30"),
-            "completion": Decimal("16.50"),
-        },
-        "claude-opus-5": {
-            "prompt": Decimal("5.50"),
-            "completion": Decimal("27.50"),
-        },
-        "claude-fable-5": {
-            "prompt": Decimal("11.00"),
-            "completion": Decimal("55.00"),
-        },
+    "claude-fable-5": {
+        "prompt": Decimal("8.50"),
+        "completion": Decimal("42.50"),
     },
+    "claude-opus-5": {
+        "prompt": Decimal("4.25"),
+        "completion": Decimal("21.25"),
+    },
+    "claude-sonnet-5": {
+        "prompt": Decimal("1.70"),
+        "completion": Decimal("8.50"),
+    },
+    "claude-haiku-4-5-20251001": {
+        "prompt": Decimal("0.85"),
+        "completion": Decimal("4.25"),
+    },
+    "claude-haiku-4.5": {
+        "prompt": Decimal("0.85"),
+        "completion": Decimal("4.25"),
+    },
+},
     "default": {
-        "prompt": Decimal("5.50"),
-        "completion": Decimal("27.50"),
+        "prompt": Decimal("4.6750"),
+        "completion": Decimal("23.3750"),
     },
 }
 
