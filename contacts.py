@@ -145,4 +145,15 @@ def crea_richiesta_contatto(dati: InputContatto, request: Request):
 
     logger.info("Nuova richiesta di contatto da %s (%s) — %s, tecnologia: %s",
                 nome, azienda, dati.motivo or "informazioni", dati.tecnologia_legacy or "n.d.")
+    # Notifica best-effort: parte in background, un errore qui non deve
+    # impedire al cliente di vedere "messaggio inviato".
+    from notifiche import notifica_nuovo_contatto
+    notifica_nuovo_contatto({
+        "name": nome, "email": email, "message": messaggio,
+        "azienda": azienda, "telefono": telefono,
+        "ruolo": dati.ruolo, "tecnologia_legacy": dati.tecnologia_legacy,
+        "dimensione_progetto": dati.dimensione_progetto,
+        "motivo": dati.motivo, "origine": dati.origine,
+    })
+    
     return {"status": "success"}
