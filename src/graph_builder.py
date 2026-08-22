@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 
@@ -6,6 +7,50 @@ import time
 import networkx as nx
 from crewai import Agent, Task, Crew
 from dbfread import DBF  # Libreria nativa per FoxPro
+import dbfread.dbf as _dbfread_dbf
+import dbfread.memo as _dbfread_memo
+
+
+def _abilita_memo_foxpro():
+    """
+    Insegna a dbfread a leggere i file memo delle Form e Class Library FoxPro.
+
+    dbfread cerca il memo solo come .fpt o .dbt, e lo apre col lettore FoxPro
+    solo se l'estensione e' .fpt. Ma le Form (.scx) tengono metodi e proprieta'
+    in un .sct, le Class Library (.vcx) in un .vct e i Menu (.mnx) in un
+    .mnt: senza questa estensione la libreria non trovava il memo e — con
+    ignore_missing_memofile=True — restituiva campi VUOTI in silenzio.
+
+    Conseguenza misurata su un applicativo reale: 80 form su 129 file
+    risultavano "analizzate, ma vuote", e gli agenti documentavano un sistema
+    di cui non avevano mai visto meta' del codice.
+    """
+    ricerca_originale = _dbfread_memo.find_memofile
+    apertura_originale = _dbfread_memo.open_memofile
+
+    def trova_memo(nome_dbf):
+        for estensione in ('.fpt', '.dbt', '.sct', '.vct', '.mnt'):
+            trovato = _dbfread_memo.ifind(nome_dbf, ext=estensione)
+            if trovato:
+                return trovato
+        return None
+
+    def apri_memo(nome_file, versione_db):
+        # .sct e .vct usano lo stesso formato del .fpt: vanno letti dal
+        # lettore FoxPro, non da quello dBase IV (che fallisce con
+        # "unpack requires a buffer of 8 bytes").
+        if nome_file.lower().endswith(('.fpt', '.sct', '.vct', '.mnt')):
+            return _dbfread_memo.VFPMemoFile(nome_file)
+        return apertura_originale(nome_file, versione_db)
+
+    # Il patch va applicato sul modulo dbf: e' li' che i nomi vengono risolti.
+    _dbfread_dbf.find_memofile = trova_memo
+    _dbfread_dbf.open_memofile = apri_memo
+    _dbfread_memo.find_memofile = trova_memo
+    _dbfread_memo.open_memofile = apri_memo
+
+
+_abilita_memo_foxpro()
 
 # log_message vive ora in src/live_log.py (stessa cartella di scrittura e
 # lettura dei log live). L'import resta qui anche come re-export per il
@@ -13,6 +58,8 @@ from dbfread import DBF  # Libreria nativa per FoxPro
 import interruzione
 from src.config import DELAY_TRA_FILE_SEC, MAX_CARATTERI_SORGENTI
 from src.live_log import log_message
+
+logger = logging.getLogger(__name__)
 
 ESCLUDI_CARTELLE = {
     # Controllo di versione
@@ -114,9 +161,70 @@ def extract_foxpro_scx_code(file_path):
 
         if codice_form_estratto:
             return "\n".join(codice_form_estratto)
+        # Una form senza metodi NE' proprieta' e' quasi sempre un problema di
+        # lettura, non una form davvero vuota: senza questo avviso il caso
+        # passava inosservato e il documento finale diceva "codice non
+        # fornito" mentre il codice c'era.
+        logger.warning("Form %s letta senza metodi ne' proprieta': "
+                       "manca il file .sct affiancato?", os.path.basename(file_path))
         return f"Form {os.path.basename(file_path)} analizzata, ma vuota."
     except Exception as e:
         return f"Errore durante il parsing nativo della Form FoxPro (.scx): {e}"
+
+
+def extract_foxpro_mnx_code(file_path):
+    """
+    Estrae da un Menu FoxPro (.mnx) la struttura delle voci e il CODICE
+    associato a ciascuna.
+
+    In un gestionale FoxPro il menu non e' decorazione: e' la mappa delle
+    funzionalita' esposte all'utente, e ogni voce contiene la chiamata che
+    apre una form o lancia una procedura. Senza, gli agenti vedono i moduli
+    ma non sanno come ci si arriva ne' quali siano i punti d'ingresso reali.
+
+    Come per le Form, il codice sta nel file memo affiancato (.mnt).
+    """
+    try:
+        table = DBF(file_path, ignore_missing_memofile=True, char_decode_errors='ignore')
+        voci = []
+
+        for record in table:
+            # I nomi dei campi cambiano di poco fra versioni: si tenta in
+            # maiuscolo e minuscolo come per gli altri estrattori.
+            def campo(*nomi):
+                for n in nomi:
+                    v = record.get(n) or record.get(n.lower()) or record.get(n.upper())
+                    if v:
+                        return str(v).strip()
+                return ""
+
+            etichetta = campo("PROMPT")
+            comando = campo("COMMAND")
+            procedura = campo("PROCEDURE")
+            nome = campo("NAME", "OBJNAME")
+
+            if not (etichetta or comando or procedura):
+                continue
+
+            voci.append("\n==========================================")
+            voci.append(f"*** VOCE DI MENU: {etichetta or nome or 'senza etichetta'} ***")
+            if nome:
+                voci.append(f"Nome interno: {nome}")
+            if comando:
+                # E' qui che si legge quale form o procedura viene aperta.
+                voci.append("--- COMANDO ASSOCIATO ---")
+                voci.append(comando)
+            if procedura:
+                voci.append("--- PROCEDURA ---")
+                voci.append(procedura)
+
+        if voci:
+            return "\n".join(voci)
+        logger.warning("Menu %s letto senza voci: manca il file .mnt affiancato?",
+                       os.path.basename(file_path))
+        return f"Menu {os.path.basename(file_path)} analizzato, ma vuoto."
+    except Exception as e:
+        return f"Errore durante il parsing nativo del Menu FoxPro (.mnx): {e}"
 
 
 def extract_foxpro_dbf_schema(file_path):
@@ -225,6 +333,10 @@ def _estrai_contenuto_file(file_path, estensione, session_id):
     if estensione == '.scx':
         log_message(session_id, f"Estrazione metodi e layout dalla Form FoxPro: {file} ...")
         return extract_foxpro_scx_code(file_path)
+
+    if estensione == '.mnx':
+        log_message(session_id, f"Estrazione voci e comandi dal Menu FoxPro: {file} ...")
+        return extract_foxpro_mnx_code(file_path)
 
     if estensione == '.dbf':
         log_message(

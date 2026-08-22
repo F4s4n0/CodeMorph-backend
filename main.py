@@ -405,6 +405,10 @@ def prepara_sorgenti(
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Il file non è un archivio ZIP valido o è corrotto.")
 
+    # Backup dedicato dei sorgenti, UNA volta sola: non cambiano piu' e non
+    # devono finire negli zip di fase, che il cliente scarica.
+    storage.salva_sorgenti(session_id, str(cartella_output))
+
     # La sessione va registrata ORA, non all'avvio della Fase 1: il consumo
     # della pre-selezione viene addebitato qui, e il movimento su
     # token_transactions fa riferimento a questa sessione. E' un upsert, e
@@ -561,7 +565,12 @@ def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
         )
 
         log_message(session_id, "🗜️ Generazione del pacchetto ZIP del codice e dei report in corso...")
-        percorso_zip = _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase1"), str(cartella_output))
+        # I sorgenti restano fuori: sono decine di MB che il cliente ha gia'
+        # caricato lui, e hanno un backup dedicato su Storage per la Fase 3.
+        percorso_zip = _crea_zip_fase(
+            str(WORKSPACE_DIR / f"{session_id}_fase1"), str(cartella_output),
+            escludi_cartelle=("sorgenti_originali",),
+        )
         storage.salva_zip_fase(session_id, "fase1", percorso_zip)
 
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
