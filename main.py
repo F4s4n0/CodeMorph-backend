@@ -370,6 +370,14 @@ def require_admin(user_id: str = Depends(get_current_user)):
 def prepara_sorgenti(
     session_id: str,
     file: UploadFile = File(...),
+    # Provider e modello scelti dall'utente: la pre-selezione deve girare
+    # sul SUO modello, non su uno fisso. I default coprono i client datati
+    # che non li inviano ancora.
+    provider_llm: str = Form(""),
+    modello_llm: str = Form(""),
+    # Il nome serve gia' qui: la sessione viene registrata prima dell'analisi
+    # e senza di esso comparirebbe senza nome in "I Miei Progetti".
+    session_name: str = Form(""),
     user_id: str = Depends(get_current_user_and_validate_license),
 ):
     """
@@ -397,9 +405,35 @@ def prepara_sorgenti(
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Il file non è un archivio ZIP valido o è corrotto.")
 
+    # La sessione va registrata ORA, non all'avvio della Fase 1: il consumo
+    # della pre-selezione viene addebitato qui, e il movimento su
+    # token_transactions fa riferimento a questa sessione. E' un upsert, e
+    # l'avvio della fase la sovrascrive con nome e impostazioni definitive.
+    try:
+        supabase.table("migration_sessions").upsert({
+            "id": session_id,
+            "user_id": user_id,
+            "session_name": session_name or "Progetto senza nome",
+            "current_step": "input",
+            "provider_llm": provider_llm or None,
+            "modello_llm": modello_llm or None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as e:
+        # Non blocca: l'analisi puo' proseguire, al massimo il movimento
+        # token non verra' collegato alla sessione.
+        logger.warning("Registrazione anticipata della sessione %s fallita: %s", session_id, e)
+
+    # La classificazione dei file e' una chiamata LLM come le altre: va
+    # contabilizzata, altrimenti su archivi grandi il costo resta a carico
+    # della piattaforma.
+    tracker = TokenUsageTracker(modello_llm)
     elenco = analizza_sorgenti(
         str(cartella_sorgenti), ESCLUDI_CARTELLE, ESTENSIONI_VALIDE, MAX_FILE_SIZE,
+        provider=provider_llm or None, modello=modello_llm or None, tracker=tracker,
     )
+    _chiudi_conteggio_token(user_id, tracker, session_id)
+
     if not elenco:
         raise HTTPException(
             status_code=400,

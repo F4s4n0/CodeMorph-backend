@@ -25,8 +25,9 @@ from src.llm_config import get_llm
 
 logger = logging.getLogger(__name__)
 
-# Modello usato per la classificazione: legge solo nomi di file, quindi
-# un modello economico è più che sufficiente. Configurabile da env.
+# Ripiego quando il chiamante non indica provider e modello: la scelta
+# dell'utente ha sempre la precedenza, cosi' l'intera sessione gira sul
+# modello che ha selezionato e non su uno diverso a sua insaputa.
 PRESELEZIONE_PROVIDER = os.getenv("PRESELEZIONE_PROVIDER", "anthropic")
 PRESELEZIONE_MODEL = os.getenv("PRESELEZIONE_MODEL", MODELLO_PREDEFINITO)
 
@@ -74,11 +75,35 @@ def _prompt_classificazione(percorsi):
     )
 
 
-def _classifica_con_llm(percorsi):
+def _conta_token(modello, testo):
+    """
+    Stima dei token di un testo. Serve perche' llm.call() restituisce solo la
+    stringa: a differenza di una Crew non espone le metriche d'uso, quindi
+    senza questo conteggio il consumo della pre-selezione non verrebbe
+    addebitato a nessuno.
+
+    Si usa il contatore di LiteLLM, che conosce il tokenizer del modello. Se
+    non e' disponibile si ripiega su una stima per caratteri: meglio un
+    addebito approssimato per difetto che nessun addebito.
+    """
+    if not testo:
+        return 0
+    try:
+        import litellm
+        return int(litellm.token_counter(model=modello, text=str(testo)))
+    except Exception:
+        # ~4 caratteri per token: regola grossolana ma dello stesso ordine
+        return max(1, len(str(testo)) // 4)
+
+
+def _classifica_con_llm(percorsi, provider=None, modello=None, tracker=None):
     """
     Chiede al modello quali file escludere. Ritorna {percorso: motivo}.
     In caso di errore ritorna un dizionario vuoto: la pre-analisi è un aiuto,
     non deve mai impedire di procedere.
+
+    `provider` e `modello` sono quelli scelti dall'utente per la sessione: se
+    mancano si ricade sui valori d'ambiente.
     """
     if not percorsi:
         return {}
@@ -88,9 +113,25 @@ def _classifica_con_llm(percorsi):
         return {}
 
     try:
-        llm = get_llm(provider=PRESELEZIONE_PROVIDER, model_name=PRESELEZIONE_MODEL)
-        risposta = llm.call(_prompt_classificazione(percorsi))
+        prov = provider or PRESELEZIONE_PROVIDER
+        mod = modello or PRESELEZIONE_MODEL
+        logger.info("Classificazione file con %s / %s su %d percorsi.", prov, mod, len(percorsi))
+        llm = get_llm(provider=prov, model_name=mod)
+        prompt = _prompt_classificazione(percorsi)
+        risposta = llm.call(prompt)
         testo = risposta if isinstance(risposta, str) else str(risposta)
+
+        # Il consumo va addebitato come quello delle fasi: e' una chiamata
+        # LLM pagata al provider come tutte le altre.
+        if tracker is not None:
+            p_tok = _conta_token(mod, prompt)
+            c_tok = _conta_token(mod, testo)
+            tracker.aggiungi_metriche({
+                "prompt_tokens": p_tok,
+                "completion_tokens": c_tok,
+                "total_tokens": p_tok + c_tok,
+                "successful_requests": 1,
+            })
         # Il modello può incorniciare il JSON in un blocco markdown
         testo = re.sub(r"^```(?:json)?|```$", "", testo.strip(), flags=re.MULTILINE).strip()
         inizio, fine = testo.find("{"), testo.rfind("}")
@@ -111,7 +152,8 @@ def _classifica_con_llm(percorsi):
         return {}
 
 
-def analizza_sorgenti(cartella_sorgenti, escludi_cartelle, estensioni_valide, max_file_size):
+def analizza_sorgenti(cartella_sorgenti, escludi_cartelle, estensioni_valide, max_file_size,
+                      provider=None, modello=None, tracker=None):
     """
     Costruisce l'elenco dei file candidati all'analisi.
 
@@ -148,7 +190,8 @@ def analizza_sorgenti(cartella_sorgenti, escludi_cartelle, estensioni_valide, ma
 
     # Alla classificazione LLM vanno solo i file sopravvissuti ai filtri statici
     da_classificare = [c["file"] for c in candidati if c["incluso"]]
-    esclusi_llm = _classifica_con_llm(da_classificare)
+    esclusi_llm = _classifica_con_llm(da_classificare, provider=provider,
+                                      modello=modello, tracker=tracker)
     for c in candidati:
         if c["file"] in esclusi_llm:
             c["incluso"] = False
