@@ -81,23 +81,58 @@ ESCLUDI_CARTELLE = {
 # vengono letti come testo. NON aggiungere qui binari senza estrattore
 # (.mdb Access, .pbl PowerBuilder): produrrebbero caratteri illeggibili
 # che gli agenti analizzerebbero comunque, a spese del cliente.
+# Estensioni ammesse all'analisi.
+#
+# REGOLA: qui entra solo cio' che contiene CODICE o STRUTTURE leggibili.
+# Un formato binario letto come testo non produce un errore: produce
+# caratteri illeggibili che finiscono nel contesto degli agenti e li
+# confondono, peggio del non leggerlo affatto. Chi ha un estrattore
+# dedicato e' segnalato; tutto il resto deve essere testo semplice.
 ESTENSIONI_VALIDE = {
-    # --- Visual FoxPro (estrattori nativi per .scx e .dbf) ---
-    '.prg', '.scx', '.dbf', '.vcx', '.mnx', '.spr',
+    # --- Visual FoxPro ------------------------------------------------
+    '.prg',      # programmi e classi: testo
+    '.scx',      # Form: DBF binario -> estrattore dedicato (memo .sct)
+    '.vcx',      # Class Library: DBF binario -> memo .vct
+    '.mnx',      # Menu: DBF binario -> estrattore dedicato (memo .mnt)
+    '.dbf',      # Tabelle: estrattore dedicato, solo schema (non i dati)
+    '.spr',      # screen generato da FoxPro 2.x: testo
+    '.qpr',      # query generate: testo
+    '.h',        # header di costanti (#DEFINE): testo
 
-    # --- Visual Basic 6 ---
-    '.bas', '.frm', '.cls', '.ctl', '.vbp', '.dsr',
+    # --- Visual Basic 6 -----------------------------------------------
+    '.bas',      # moduli standard
+    '.cls',      # moduli di classe
+    '.frm',      # form: TESTO (le risorse binarie stanno nel .frx, escluso)
+    '.ctl',      # user control
+    '.vbp',      # progetto: elenco file e riferimenti
+    '.vbg',      # gruppo di progetti
+    # .dsr e .dsx (designer) sono spesso binari: esclusi di proposito
 
-    # --- Delphi / Pascal ---
-    '.pas', '.dpr', '.dfm', '.dpk', '.inc',
+    # --- Delphi / Pascal ----------------------------------------------
+    '.pas',      # unit
+    '.dpr',      # progetto
+    '.dpk',      # package
+    '.inc',      # include
+    '.dof',      # opzioni di progetto: testo, utile per le dipendenze
+    # ATTENZIONE: .dfm puo' essere salvato in formato TESTO o BINARIO a
+    # seconda del progetto. Incluso perche' nella maggior parte dei casi
+    # e' testo; se arriva binario il controllo a valle lo segnala.
+    '.dfm',      # form Delphi (testo nella maggior parte dei progetti)
 
-    # --- COBOL e mainframe ---
-    '.cbl', '.cob', '.cpy', '.jcl', '.pco', '.ddl',
+    # --- COBOL e mainframe --------------------------------------------
+    '.cbl', '.cob',   # programmi
+    '.cpy',           # copybook: e' qui che stanno le strutture dati
+    '.jcl',           # job control
+    '.pco',           # COBOL con SQL embedded
+    '.ddl',           # definizioni di schema
 
-    # --- AS/400 - RPG ---
-    '.rpg', '.rpgle', '.sqlrpgle', '.clp', '.clle', '.dds',
+    # --- AS/400 - RPG --------------------------------------------------
+    '.rpg', '.rpgle', '.sqlrpgle',
+    '.clp', '.clle',  # Control Language
+    '.dds',           # descrizioni di file e video
+    '.pf', '.lf',     # physical/logical file (quando esportati come sorgente)
 
-    # --- Altri legacy ---
+    # --- Altri legacy ---------------------------------------------------
     '.f', '.f77', '.f90', '.for',           # Fortran
     '.asm', '.s',                            # Assembly
     '.pl', '.pm',                            # Perl
@@ -106,13 +141,15 @@ ESTENSIONI_VALIDE = {
     '.p', '.w', '.i',                        # Progress OpenEdge
     '.abap',                                 # SAP ABAP
     '.vb',                                   # VB.NET
+    '.pb', '.sr', '.srw',                    # PowerBuilder (export testuale)
 
-    # --- Linguaggi moderni (sistemi misti e stack target) ---
+    # --- Linguaggi moderni (sistemi misti e stack target) -------------
     '.cs', '.java', '.py', '.js', '.ts', '.jsx', '.tsx',
     '.php', '.go', '.rs', '.rb', '.kt', '.swift', '.scala',
-    '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp',
+    '.c', '.cpp', '.cc', '.cxx', '.hpp',
+    '.razor', '.vue',
 
-    # --- Dati, configurazione, markup ---
+    # --- Dati, configurazione, markup ---------------------------------
     '.sql', '.json', '.xml', '.yaml', '.yml', '.ini', '.conf', '.config',
     '.html', '.htm', '.css', '.scss',
     '.asp', '.aspx', '.ascx', '.jsp',        # pagine server-side legacy
@@ -322,6 +359,29 @@ def extract_dependencies_from_file(file_name, file_content, llm, tracker=None):
 # Costruzione del grafo
 # =====================================================================
 
+def _sembra_binario(testo, soglia=0.15):
+    """
+    True se il testo letto e' con ogni probabilita' un file binario.
+
+    Serve perche' alcune estensioni ammesse esistono in due varianti (il .dfm
+    Delphi puo' essere testo o binario) e perche' un formato inatteso non deve
+    finire nel contesto come sequenza di caratteri illeggibili: un agente che
+    riceve spazzatura produce documentazione basata su spazzatura, senza che
+    nessuno se ne accorga.
+
+    Criterio: presenza di byte nulli, oppure una quota eccessiva di caratteri
+    di controllo sul campione iniziale.
+    """
+    if not testo:
+        return False
+    campione = testo[:4000]
+    if "\x00" in campione:
+        return True
+    controllo = sum(1 for c in campione
+                    if ord(c) < 32 and c not in "\t\n\r")
+    return (controllo / len(campione)) > soglia
+
+
 def _estrai_contenuto_file(file_path, estensione, session_id):
     """
     Restituisce il contenuto testuale del file usando la strategia adatta
@@ -351,7 +411,16 @@ def _estrai_contenuto_file(file_path, estensione, session_id):
             log_message(session_id, f"Salto {file}: file di testo troppo grande (>250KB).")
             return None
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
+            contenuto = f.read()
+        if _sembra_binario(contenuto):
+            # Alcuni formati esistono in due varianti: un .dfm Delphi puo'
+            # essere testo o binario a seconda di come e' stato salvato.
+            # Passarlo agli agenti come testo significherebbe riempire il
+            # contesto di caratteri illeggibili: meglio dirlo e saltarlo.
+            log_message(session_id, f"Salto {file}: sembra un file binario, non testo leggibile.")
+            logger.warning("File %s scartato: contenuto binario in un'estensione attesa come testo.", file)
+            return None
+        return contenuto
     except OSError as e:
         log_message(session_id, f"Impossibile leggere il file {file}: {e}")
         return None
