@@ -6,6 +6,8 @@ from crewai import Task
 
 from src.config import (
     CONVENZIONI_FASE1,
+    MAX_PROGETTI_ATTESI,
+    STRUTTURA_SOLUTION_RULES,
     FILE_ASSESSMENT,
     FILE_DEPENDENCY_MAP,
     FILE_TECH_DOC,
@@ -239,8 +241,12 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "logici di scomposizione.\n"
             "2. Gli Architectural Decision Records (ADR) che motivano formalmente la "
             "scelta dei nuovi pattern di design, la struttura delle cartelle, i "
-            "modelli database e lo standard delle API nel nuovo sistema target."
-            "\n\nCODICE SORGENTE LEGACY (evidenza primaria):\n"
+            "modelli database e lo standard delle API nel nuovo sistema target.\n"
+            "3. La STRUTTURA DELLA SOLUTION: l'elenco esatto dei progetti che "
+            "comporranno il sistema target. E' la decisione che il cliente approva "
+            "al Check Point 2, PRIMA che venga scritta una riga di codice.\n"
+            + STRUTTURA_SOLUTION_RULES
+            + "\n\nCODICE SORGENTE LEGACY (evidenza primaria):\n"
             "In caso di discrepanza tra la documentazione della fase precedente "
             "e il codice, fa fede il codice. Non attribuire al sistema componenti, "
             "tabelle o campi che non trovi qui.\n"
@@ -267,7 +273,11 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "sezioni che non svilupperai, non inserire rinvii a sezioni "
             "inesistenti, e concludi il testo prima di esaurire lo spazio. "
             "Meglio 5 sezioni piene di contenuto specifico che 8 riempite di "
-            "prassi generiche."
+            "prassi generiche. "
+            "OBBLIGATORIO: il documento deve contenere la sezione "
+            "'### STRUTTURA SOLUTION' nel formato indicato, con l'elenco puntato "
+            "dei progetti. E' la parte che il cliente approva e che guida la "
+            "generazione del codice: senza, la Fase 3 inventa una struttura propria."
         ),
         agent=agents["cloud_solutions_architect"],
         output_file=f"{output_dir}/{FILE_MIGRATION_PLAN}",
@@ -345,6 +355,7 @@ def get_iterative_implementation_tasks(
     contesto_funzionale="",
     contesto_test="",
     tipi_gia_generati=None,
+    progetti_esistenti=None,
 ):
     """
     Genera i task dinamicamente per UN SINGOLO file legacy,
@@ -362,6 +373,44 @@ def get_iterative_implementation_tasks(
     safe_funzionale = _escape_braces(contesto_funzionale)
     safe_test = _escape_braces(contesto_test)
 
+    if progetti_esistenti:
+        elenco_prog = ", ".join(sorted(progetti_esistenti))
+        blocco_progetti = f"""
+        ARCHITETTURA APPROVATA DAL CLIENTE — USA QUESTI PROGETTI, NON CREARNE ALTRI:
+        {_escape_braces(elenco_prog)}
+        Ogni file che produci deve stare in UNO di questi progetti. NON
+        inventare nomi nuovi, NON aggiungere suffissi tipo "Modernized",
+        "New" o "WebApi", NON alternare punti e underscore: `Fox.Warehouse` e
+        `Fox_Warehouse` diventerebbero due progetti distinti per la stessa
+        cosa, e la solution non si compila piu'.
+        Questa struttura e' stata decisa in fase di progettazione e APPROVATA
+        dal cliente al Check Point 2: non e' una proposta, e' un vincolo.
+        Solo se una funzionalita' non ha davvero posto in nessuno di essi puoi
+        aggiungere un progetto, seguendo ESATTAMENTE la stessa convenzione di
+        nomi di quelli elencati.
+"""
+    else:
+        # Primo file della fase: qui l'architettura si DECIDE. I nomi scelti
+        # ora diventano vincolanti per tutti i file successivi.
+        blocco_progetti = f"""
+        SEI IL PRIMO FILE DELLA MIGRAZIONE: definisci ORA la struttura della
+        solution, e varra' per tutti i file successivi.
+
+        REGOLA DI STRUTTURA (vale per QUALSIASI progetto, di qualsiasi
+        dimensione): dividi per STRATO, non per funzionalita'. Massimo
+        {MAX_PROGETTI_ATTESI} progetti in tutto, con nomi del tipo:
+          <Prodotto>.Api            (endpoint e controller)
+          <Prodotto>.Application    (casi d'uso, servizi applicativi)
+          <Prodotto>.Domain         (entita' e regole di business)
+          <Prodotto>.Infrastructure (accesso a dati e sistemi esterni)
+
+        Le aree funzionali del sistema legacy (magazzino, personale,
+        contabilita'...) diventano CARTELLE dentro questi progetti, MAI
+        progetti separati: il numero di progetti non deve crescere con il
+        numero di file migrati. Una sola convenzione di separatori: usa il
+        punto, mai l'underscore.
+"""
+
     if tipi_gia_generati:
         elenco = ", ".join(sorted(tipi_gia_generati)[:150])
         blocco_tipi_esistenti = f"""
@@ -373,6 +422,8 @@ def get_iterative_implementation_tasks(
 """
     else:
         blocco_tipi_esistenti = ""
+
+    blocco_tipi_esistenti = blocco_progetti + blocco_tipi_esistenti
 
     backend_task = Task(
         description=f"""
