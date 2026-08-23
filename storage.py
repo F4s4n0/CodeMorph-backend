@@ -106,6 +106,11 @@ def salva_sorgenti(session_id, cartella_sessione):
     esecuzione, con minuti di attesa e banda sprecata a ogni giro.
 
     Se il backup esiste gia' non viene rifatto: e' immutabile.
+
+    Gira in BACKGROUND (vedi /prepara): il cliente riceve subito l'elenco dei
+    file mentre il caricamento prosegue. Un fallimento qui non toglie nulla
+    all'analisi in corso — si perde solo la possibilita' di ripristinare i
+    sorgenti dopo un riavvio di Render, e il log lo dice chiaramente.
     """
     cartella_sorgenti = os.path.join(cartella_sessione, NOME_SORGENTI)
     if not os.path.isdir(cartella_sorgenti):
@@ -133,6 +138,13 @@ def salva_sorgenti(session_id, cartella_sessione):
             file=contenuto,
             file_options={"content-type": "application/zip", "upsert": "true"},
         )
+        # Verifica che il file sul bucket sia completo: un riavvio del
+        # processo a meta' caricamento lascerebbe un backup troncato, che al
+        # ripristino fallirebbe in silenzio quando ormai serve davvero.
+        if not _sorgenti_integri(session_id, len(contenuto)):
+            logger.warning("Backup sorgenti di %s incompleto sul bucket: verra' rifatto.", session_id)
+            return False
+
         logger.info("Backup sorgenti su Storage: %s (%.1f KB)", session_id, len(contenuto) / 1024)
         return True
     except Exception as e:
@@ -143,6 +155,24 @@ def salva_sorgenti(session_id, cartella_sessione):
             os.remove(percorso_temporaneo)
         except OSError:
             pass
+
+
+def _sorgenti_integri(session_id, dimensione_attesa):
+    """True se il backup sul bucket ha la dimensione che ci si aspetta."""
+    try:
+        elenco = supabase.storage.from_(BUCKET_SESSIONI).list(session_id)
+        for voce in (elenco or []):
+            nome = voce.get("name") if isinstance(voce, dict) else getattr(voce, "name", "")
+            if nome != "sorgenti.zip":
+                continue
+            meta = voce.get("metadata") if isinstance(voce, dict) else None
+            dimensione = (meta or {}).get("size")
+            # Se il bucket non espone la dimensione non si puo' verificare:
+            # si assume valido invece di rifare un caricamento da capo.
+            return dimensione is None or int(dimensione) == dimensione_attesa
+        return False
+    except Exception:
+        return True          # verifica non disponibile: non si blocca nulla
 
 
 def _esiste_sorgenti(session_id):

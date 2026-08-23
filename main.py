@@ -369,6 +369,7 @@ def require_admin(user_id: str = Depends(get_current_user)):
 @app.post("/api/v1/modernize/prepara/{session_id}")
 def prepara_sorgenti(
     session_id: str,
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     # Provider e modello scelti dall'utente: la pre-selezione deve girare
     # sul SUO modello, non su uno fisso. I default coprono i client datati
@@ -407,7 +408,13 @@ def prepara_sorgenti(
 
     # Backup dedicato dei sorgenti, UNA volta sola: non cambiano piu' e non
     # devono finire negli zip di fase, che il cliente scarica.
-    storage.salva_sorgenti(session_id, str(cartella_output))
+    #
+    # In BACKGROUND: comprimere e caricare decine di MB richiede minuti, e
+    # farlo prima di rispondere significa lasciare il cliente davanti a uno
+    # spinner per tutto il tempo. L'elenco dei file non dipende dal backup,
+    # quindi puo' partire subito; il backup serve solo a un eventuale
+    # ripristino DOPO un riavvio, che nel frattempo non e' ancora possibile.
+    background.add_task(storage.salva_sorgenti, session_id, str(cartella_output))
 
     # La sessione va registrata ORA, non all'avvio della Fase 1: il consumo
     # della pre-selezione viene addebitato qui, e il movimento su

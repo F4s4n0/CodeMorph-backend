@@ -35,6 +35,44 @@ PRESELEZIONE_MODEL = os.getenv("PRESELEZIONE_MODEL", MODELLO_PREDEFINITO)
 # sarebbe troppo lunga e i filtri statici hanno già fatto il grosso.
 MAX_FILE_PER_LLM = 800
 
+# Formati binari con un estrattore dedicato: NON vanno trattati come
+# illeggibili. Un .scx è un DBF binario, ma il parser FoxPro ne ricava
+# metodi e proprietà: escluderlo perché "binario" toglierebbe al cliente
+# proprio i file dove sta la logica.
+ESTENSIONI_CON_ESTRATTORE = {".scx", ".vcx", ".mnx", ".dbf"}
+
+# Quanto si legge per capire se un file è testo. 4 KB bastano: un binario
+# mostra byte nulli quasi subito.
+CAMPIONE_BINARIO = 4096
+
+
+def _sembra_binario(percorso, soglia=0.15):
+    """
+    True se il file non è leggibile come testo.
+
+    Alcune estensioni ammesse esistono in DUE varianti: un .dfm Delphi può
+    essere salvato come testo o come binario, e dall'estensione non si può
+    sapere. Passare un binario agli agenti significa riempire il contesto di
+    caratteri illeggibili — peggio che non leggerlo, perché la documentazione
+    verrebbe costruita su quella spazzatura senza che nessuno se ne accorga.
+    """
+    try:
+        with open(percorso, "rb") as f:
+            campione = f.read(CAMPIONE_BINARIO)
+    except OSError:
+        return False
+    if not campione:
+        return False
+    if b"\x00" in campione:
+        return True
+    controllo = sum(1 for b in campione if b < 32 and b not in (9, 10, 13))
+    return (controllo / len(campione)) > soglia
+
+
+def _e_testo_leggibile(percorso):
+    """True se un file con estensione sconosciuta sembra comunque codice."""
+    return not _sembra_binario(percorso)
+
 
 def _escluso_da_pattern(percorso_relativo):
     """
@@ -160,24 +198,75 @@ def analizza_sorgenti(cartella_sorgenti, escludi_cartelle, estensioni_valide, ma
     Ritorna una lista di dizionari:
       {"file": percorso relativo, "dimensione": byte, "incluso": bool, "motivo": str|None}
 
-    I file scartati dai limiti tecnici (binari, cartelle di dipendenze) NON
-    compaiono affatto. Compaiono invece quelli esclusi dai pattern o dall'LLM,
-    deselezionati e con il motivo, così l'utente può sempre recuperarli.
+    OGNI file trovato riceve una decisione VISIBILE, con il suo motivo:
+    pattern noto, suggerimento dell'LLM, formato binario, dimensione oltre il
+    limite, estensione non riconosciuta. Il cliente li vede deselezionati e
+    può includerli comunque.
+
+    Restano fuori dall'elenco solo i file che nessuno vorrebbe analizzare
+    (immagini, eseguibili, archivi) e le cartelle di build o dipendenze:
+    elencarli sarebbe rumore, non informazione.
+
+    Il principio: il cliente deve poter sapere COSA verrà analizzato e cosa
+    no. Un file che sparisce in silenzio e' un pezzo di sistema che non viene
+    documentato senza che nessuno se ne accorga.
     """
     candidati = []
+    ignorati = 0
     for root, dirs, files in os.walk(cartella_sorgenti):
         dirs[:] = [d for d in dirs if d not in escludi_cartelle]
         for nome_file in files:
             percorso_assoluto = os.path.join(root, nome_file)
             relativo = os.path.relpath(percorso_assoluto, cartella_sorgenti).replace("\\", "/")
+            estensione = os.path.splitext(nome_file)[1].lower()
 
-            if os.path.splitext(nome_file)[1].lower() not in estensioni_valide:
-                continue
             try:
                 dimensione = os.path.getsize(percorso_assoluto)
             except OSError:
                 continue
+
+            # --- Estensione NON riconosciuta ------------------------------
+            # Prima sparivano in silenzio. Se il contenuto è testo può essere
+            # codice in un formato che non conosciamo: si mostra deselezionato
+            # e il cliente decide. Se è binario (immagini, eseguibili, archivi)
+            # resta fuori: elencarlo sarebbe solo rumore.
+            if estensione not in estensioni_valide:
+                if dimensione <= max_file_size and _e_testo_leggibile(percorso_assoluto):
+                    candidati.append({
+                        "file": relativo,
+                        "dimensione": dimensione,
+                        "incluso": False,
+                        "motivo": "Estensione non riconosciuta: il contenuto sembra testo, "
+                                  "includilo se contiene codice.",
+                    })
+                else:
+                    ignorati += 1
+                continue
+
+            # --- Troppo grande --------------------------------------------
+            # Anche questo spariva senza dire nulla, e su un file di logica
+            # importante il cliente non poteva nemmeno saperlo.
             if dimensione > max_file_size:
+                candidati.append({
+                    "file": relativo,
+                    "dimensione": dimensione,
+                    "incluso": False,
+                    "motivo": f"Troppo grande ({dimensione // 1024} KB): oltre il limite "
+                              f"di {max_file_size // 1024} KB per singolo file.",
+                })
+                continue
+
+            # --- Binario in un'estensione attesa come testo ----------------
+            # I formati FoxPro con estrattore dedicato sono binari per natura
+            # e vanno lasciati passare.
+            if estensione not in ESTENSIONI_CON_ESTRATTORE and _sembra_binario(percorso_assoluto):
+                candidati.append({
+                    "file": relativo,
+                    "dimensione": dimensione,
+                    "incluso": False,
+                    "motivo": "Formato binario: il contenuto non è leggibile come testo "
+                              "e non produrrebbe analisi utile.",
+                })
                 continue
 
             motivo_pattern = _escluso_da_pattern(relativo)
@@ -187,6 +276,10 @@ def analizza_sorgenti(cartella_sorgenti, escludi_cartelle, estensioni_valide, ma
                 "incluso": motivo_pattern is None,
                 "motivo": motivo_pattern,
             })
+
+    if ignorati:
+        logger.info("Pre-analisi: %d file non elencati (binari o troppo grandi "
+                    "con estensione sconosciuta).", ignorati)
 
     # Alla classificazione LLM vanno solo i file sopravvissuti ai filtri statici
     da_classificare = [c["file"] for c in candidati if c["incluso"]]
