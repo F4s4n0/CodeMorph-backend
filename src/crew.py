@@ -653,15 +653,19 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
     # punto in cui il sorgente completo e' in memoria. Il marcatore usato dal
     # raccoglitore permette di contare anche quanti file lo compongono.
     testo_legacy = codice_legacy or ""
+    numero_file = testo_legacy.count("----- FILE:")
     _salva_metriche(
         session_id,
         righe_legacy=testo_legacy.count("\n") + 1 if testo_legacy else 0,
         caratteri_legacy=len(testo_legacy),
-        file_legacy_analizzati=testo_legacy.count("----- FILE:") or None,
+        file_legacy_analizzati=numero_file or None,
     )
 
     agents = create_agents(llm)
-    tasks = get_understanding_tasks(agents, output_dir)
+    # Il numero di file regola l'ampiezza attesa dei documenti: su un sistema
+    # da centinaia di file gli agenti devono coprire tutte le aree funzionali,
+    # non comprimere tutto nello spazio pensato per un applicativo piccolo.
+    tasks = get_understanding_tasks(agents, output_dir, numero_file=numero_file)
     annuncia_avvio, task_callback = crea_logger_attivita(
         session_id, tasks, etichetta="Fase 1 · Understanding"
     )

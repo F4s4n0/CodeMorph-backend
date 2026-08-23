@@ -73,7 +73,30 @@ class MascheraChiaviURL(logging.Filter):
 
 # Sul logger "httpx", non sul root: i filtri NON si propagano ai logger figli,
 # quindi applicarlo altrove non avrebbe alcun effetto.
-logging.getLogger("httpx").addFilter(MascheraChiaviURL())
+def _applica_maschera_chiavi():
+    """
+    Applica il filtro agli HANDLER, non a un singolo logger.
+
+    Un filtro su logging.getLogger("httpx") cattura solo cio' che passa da
+    quel logger: se domani LiteLLM, urllib3 o un'altra libreria registrasse
+    un URL con la chiave in query string, non verrebbe mascherata. Sugli
+    handler passa invece TUTTO cio' che viene scritto.
+
+    Va richiamata anche dopo l'avvio: uvicorn installa i propri handler
+    quando importa l'app, quindi un aggancio fatto solo a import-time
+    potrebbe non coprirli.
+    """
+    maschera = MascheraChiaviURL()
+    for logger_nome in ("", "httpx", "uvicorn", "uvicorn.error", "uvicorn.access", "LiteLLM"):
+        obiettivo = logging.getLogger(logger_nome)
+        if not any(isinstance(f, MascheraChiaviURL) for f in obiettivo.filters):
+            obiettivo.addFilter(maschera)
+        for handler in obiettivo.handlers:
+            if not any(isinstance(f, MascheraChiaviURL) for f in handler.filters):
+                handler.addFilter(maschera)
+
+
+_applica_maschera_chiavi()
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +143,16 @@ app.include_router(affiliazione_router)
 
 #Statistiche
 app.include_router(statistiche_router)
+
+@app.on_event("startup")
+def _riapplica_maschera_chiavi():
+    """
+    Uvicorn installa i propri handler DOPO l'import del modulo: senza questa
+    seconda applicazione il filtro coprirebbe solo gli handler esistenti a
+    import-time, e una chiave API potrebbe comparire in chiaro nei log.
+    """
+    _applica_maschera_chiavi()
+
 
 @app.on_event("startup")
 def _sblocca_sessioni_orfane():

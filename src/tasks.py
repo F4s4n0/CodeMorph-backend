@@ -50,11 +50,50 @@ def _nota_data():
 # FASE 1 - UNDERSTANDING
 # =====================================================================
 
-def get_understanding_tasks(agents, output_dir):
+def get_understanding_tasks(agents, output_dir, numero_file=0):
     """
     Ritorna i task per la FASE 1: Understanding (Universale).
     L'output combinato di questi task fermerà il flusso per il CHECK POINT 1.
+
+    `numero_file` serve a calibrare l'ampiezza dei documenti. Il vincolo
+    precedente era assoluto ("massimo 8 sezioni") e valeva identico per 4 file
+    e per 278: su un applicativo grande gli agenti comprimevano tutto nello
+    stesso spazio, citando 44 file su 278 e lasciando fuori il resto.
+
+    La sostituzione NON e' un tetto piu' alto — sarebbe lo stesso errore con
+    numeri diversi — ma un criterio di COPERTURA: ogni area funzionale una
+    sezione, ogni file un posto. La lunghezza la detta il sistema analizzato.
     """
+    # Nessun tetto numerico: sarebbe arbitrario (a 149 file un documento e'
+    # "medio", a 150 "grande"?) e produrrebbe lo stesso difetto di prima, solo
+    # con soglie diverse. Il criterio e' la COPERTURA: ogni area funzionale
+    # deve avere la sua trattazione, ogni file un posto. Cosi' l'ampiezza
+    # nasce dal sistema analizzato invece che da un numero deciso a priori.
+    vincolo_ampiezza = (
+        "AMPIEZZA DEL DOCUMENTO — si misura sulla COPERTURA, non sul numero di "
+        "pagine: struttura il documento in tante sezioni quante sono le aree "
+        "funzionali che hai effettivamente individuato nel codice, e assicurati "
+        "che OGNI file analizzato trovi posto in almeno una di esse. Un modulo "
+        "non citato e' un modulo che il cliente credera' non analizzato. "
+        "Su un sistema piccolo verranno poche sezioni molto approfondite; su un "
+        "sistema con centinaia di file ne serviranno molte di piu': in entrambi "
+        "i casi e' il sistema a dettare la lunghezza, non un limite prefissato. "
+        "NON diluire per allungare: se un'area e' semplice, poche righe "
+        "specifiche valgono piu' di un paragrafo di prassi generiche. "
+        "COMPLETEZZA: il documento deve essere autoconclusivo. Non annunciare "
+        "nell'indice sezioni che non svilupperai, non inserire rinvii a sezioni "
+        "inesistenti, e concludi il testo prima di esaurire lo spazio "
+        "disponibile: meglio meno sezioni tutte complete che molte dichiarate "
+        "e troncate."
+    )
+    if numero_file:
+        # Il numero dei file e' l'unico dato oggettivo che l'agente non puo'
+        # ricavare dal contesto (che riceve gia' concatenato): darglielo gli
+        # permette di calibrare da solo quanto deve essere esteso il lavoro.
+        vincolo_ampiezza = (
+            f"Il codice legacy fornito comprende {numero_file} file distinti: "
+            "il documento deve rendere conto di tutti. " + vincolo_ampiezza
+        )
 
     assessment_task = Task(
         description=(
@@ -71,11 +110,7 @@ def get_understanding_tasks(agents, output_dir):
             "Un documento di 'Inventory' strutturato in formato Markdown che elenca "
             "in modo esaustivo tutti gli asset identificati nel codice legacy, la "
             "tipologia dei file, le dimensioni e l'analisi statica iniziale. "
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
-            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
+            + vincolo_ampiezza
         ),
         agent=agents["legacy_system_analyzer"],
         output_file=f"{output_dir}/{FILE_ASSESSMENT}",
@@ -97,11 +132,7 @@ def get_understanding_tasks(agents, output_dir):
             "e processi; 2) una tabella riassuntiva delle dipendenze; "
             "3) l'evidenza dei punti critici di accoppiamento. "
             "Un report senza il diagramma Mermaid è considerato incompleto."
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
-            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
+            + vincolo_ampiezza
         ),
         agent=agents["dependency_mapper"],
         context=[assessment_task],
@@ -119,11 +150,7 @@ def get_understanding_tasks(agents, output_dir):
         expected_output=(
             "Un documento in Markdown contenente la Technical Documentation "
             "dettagliata del software originale. "
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
-            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate. "
+            + vincolo_ampiezza + " "
             "VINCOLO DI PROPORZIONE: documenta ciò che hai effettivamente letto "
             "nel codice sorgente. NON aggiungere sezioni generiche sui pattern "
             "architetturali in astratto, glossari di termini informatici comuni, "
@@ -156,11 +183,7 @@ def get_understanding_tasks(agents, output_dir):
             "Stories con criteri di accettazione. Il titolo del documento è "
             "'Documentazione Funzionale': il Product Backlog è la sua forma, "
             "non il suo nomeUn documento."
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
-            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
+            + vincolo_ampiezza
         ),
         agent=agents["functional_analyst"],
         context=[assessment_task, map_dependency_task],
@@ -180,11 +203,7 @@ def get_understanding_tasks(agents, output_dir):
             "Un documento 'Test Book' strutturato in Markdown contenente le schede "
             "dei test funzionali e i vincoli dei Contract Test necessari a validare "
             "il successo della futura modernizzazione."
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
-            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate. "
+            + vincolo_ampiezza + " "
             "VINCOLO DI PROPORZIONE: il piano di test deve essere proporzionato "
             "al sistema analizzato. NON includere sezioni di metodologia generica "
             "(cos'è un test di regressione, strategia di test in astratto, "
