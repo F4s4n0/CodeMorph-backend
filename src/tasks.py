@@ -6,6 +6,8 @@ from crewai import Task
 
 from src.config import (
     CONVENZIONI_FASE1,
+    MAX_PROGETTI_ATTESI,
+    STRUTTURA_SOLUTION_RULES,
     FILE_ASSESSMENT,
     FILE_DEPENDENCY_MAP,
     FILE_TECH_DOC,
@@ -48,11 +50,50 @@ def _nota_data():
 # FASE 1 - UNDERSTANDING
 # =====================================================================
 
-def get_understanding_tasks(agents, output_dir):
+def get_understanding_tasks(agents, output_dir, numero_file=0):
     """
     Ritorna i task per la FASE 1: Understanding (Universale).
     L'output combinato di questi task fermerà il flusso per il CHECK POINT 1.
+
+    `numero_file` serve a calibrare l'ampiezza dei documenti. Il vincolo
+    precedente era assoluto ("massimo 8 sezioni") e valeva identico per 4 file
+    e per 278: su un applicativo grande gli agenti comprimevano tutto nello
+    stesso spazio, citando 44 file su 278 e lasciando fuori il resto.
+
+    La sostituzione NON e' un tetto piu' alto — sarebbe lo stesso errore con
+    numeri diversi — ma un criterio di COPERTURA: ogni area funzionale una
+    sezione, ogni file un posto. La lunghezza la detta il sistema analizzato.
     """
+    # Nessun tetto numerico: sarebbe arbitrario (a 149 file un documento e'
+    # "medio", a 150 "grande"?) e produrrebbe lo stesso difetto di prima, solo
+    # con soglie diverse. Il criterio e' la COPERTURA: ogni area funzionale
+    # deve avere la sua trattazione, ogni file un posto. Cosi' l'ampiezza
+    # nasce dal sistema analizzato invece che da un numero deciso a priori.
+    vincolo_ampiezza = (
+        "AMPIEZZA DEL DOCUMENTO — si misura sulla COPERTURA, non sul numero di "
+        "pagine: struttura il documento in tante sezioni quante sono le aree "
+        "funzionali che hai effettivamente individuato nel codice, e assicurati "
+        "che OGNI file analizzato trovi posto in almeno una di esse. Un modulo "
+        "non citato e' un modulo che il cliente credera' non analizzato. "
+        "Su un sistema piccolo verranno poche sezioni molto approfondite; su un "
+        "sistema con centinaia di file ne serviranno molte di piu': in entrambi "
+        "i casi e' il sistema a dettare la lunghezza, non un limite prefissato. "
+        "NON diluire per allungare: se un'area e' semplice, poche righe "
+        "specifiche valgono piu' di un paragrafo di prassi generiche. "
+        "COMPLETEZZA: il documento deve essere autoconclusivo. Non annunciare "
+        "nell'indice sezioni che non svilupperai, non inserire rinvii a sezioni "
+        "inesistenti, e concludi il testo prima di esaurire lo spazio "
+        "disponibile: meglio meno sezioni tutte complete che molte dichiarate "
+        "e troncate."
+    )
+    if numero_file:
+        # Il numero dei file e' l'unico dato oggettivo che l'agente non puo'
+        # ricavare dal contesto (che riceve gia' concatenato): darglielo gli
+        # permette di calibrare da solo quanto deve essere esteso il lavoro.
+        vincolo_ampiezza = (
+            f"Il codice legacy fornito comprende {numero_file} file distinti: "
+            "il documento deve rendere conto di tutti. " + vincolo_ampiezza
+        )
 
     assessment_task = Task(
         description=(
@@ -62,18 +103,33 @@ def get_understanding_tasks(agents, output_dir):
             "Esegui un'analisi statica approfondita. Identifica tutti i componenti "
             "del sistema sorgente. Mappa le strutture dati, i moduli software, le "
             "dipendenze esterne, le costanti e l'inventario complessivo "
-            "dell'applicativo legacy analizzato."
+            "dell'applicativo legacy analizzato.\n\n"
+            "APRI il documento con un PROSPETTO QUANTITATIVO: una tabella che "
+            "riporti, per ogni tipologia di file, QUANTI ne hai analizzati e a "
+            "cosa servono. Esempio di formato:\n"
+            "| Tipologia | N. | Ruolo nel sistema |\n"
+            "|---|---|---|\n"
+            "| Programmi (.prg) | 47 | Logica di business e procedure batch |\n"
+            "| Form (.scx) | 80 | Interfaccia utente e logica negli eventi |\n"
+            "| Tabelle (.dbf) | 31 | Persistenza dati |\n\n"
+            "I numeri devono essere QUELLI REALI dei file che hai ricevuto, non "
+            "una stima: il cliente li confronta con quanto ha caricato, ed e' cosi' "
+            "che capisce se l'analisi ha coperto tutto.\n\n"
+            "Poi, per OGNI tipologia, una TABELLA con una riga per file: nome, "
+            "attributi rilevanti (dimensione, tabelle usate, dipendenze) e una "
+            "descrizione di una riga di cosa fa. Le tabelle sono obbligatorie: "
+            "un elenco puntato discorsivo non permette al cliente di verificare "
+            "che il SUO file sia stato analizzato. Se una tipologia ha decine di "
+            "file, raggruppa per area funzionale ma NON omettere righe."
              + CONVENZIONI_FASE1
         )+ _nota_data(),
         expected_output=(
-            "Un documento di 'Inventory' strutturato in formato Markdown che elenca "
-            "in modo esaustivo tutti gli asset identificati nel codice legacy, la "
-            "tipologia dei file, le dimensioni e l'analisi statica iniziale. "
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
-            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
+            "Un documento di 'Inventory' in Markdown che si apre con il PROSPETTO "
+            "QUANTITATIVO (quanti file per tipologia) e prosegue con una TABELLA "
+            "per ogni tipologia, una riga per file, con nome, attributi e "
+            "descrizione. Il totale delle righe deve corrispondere ai file "
+            "ricevuti: e' la prova che l'analisi e' stata esaustiva. "
+            + vincolo_ampiezza
         ),
         agent=agents["legacy_system_analyzer"],
         output_file=f"{output_dir}/{FILE_ASSESSMENT}",
@@ -95,11 +151,7 @@ def get_understanding_tasks(agents, output_dir):
             "e processi; 2) una tabella riassuntiva delle dipendenze; "
             "3) l'evidenza dei punti critici di accoppiamento. "
             "Un report senza il diagramma Mermaid è considerato incompleto."
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
-            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
+            + vincolo_ampiezza
         ),
         agent=agents["dependency_mapper"],
         context=[assessment_task],
@@ -117,11 +169,7 @@ def get_understanding_tasks(agents, output_dir):
         expected_output=(
             "Un documento in Markdown contenente la Technical Documentation "
             "dettagliata del software originale. "
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
-            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate. "
+            + vincolo_ampiezza + " "
             "VINCOLO DI PROPORZIONE: documenta ciò che hai effettivamente letto "
             "nel codice sorgente. NON aggiungere sezioni generiche sui pattern "
             "architetturali in astratto, glossari di termini informatici comuni, "
@@ -154,11 +202,7 @@ def get_understanding_tasks(agents, output_dir):
             "Stories con criteri di accettazione. Il titolo del documento è "
             "'Documentazione Funzionale': il Product Backlog è la sua forma, "
             "non il suo nomeUn documento."
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
-            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate."
+            + vincolo_ampiezza
         ),
         agent=agents["functional_analyst"],
         context=[assessment_task, map_dependency_task],
@@ -178,11 +222,7 @@ def get_understanding_tasks(agents, output_dir):
             "Un documento 'Test Book' strutturato in Markdown contenente le schede "
             "dei test funzionali e i vincoli dei Contract Test necessari a validare "
             "il successo della futura modernizzazione."
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni inesistenti, "
-            "e concludi sempre il testo prima di esaurire lo spazio disponibile. "
-            "Meglio 6 sezioni complete che 13 dichiarate e troncate. "
+            + vincolo_ampiezza + " "
             "VINCOLO DI PROPORZIONE: il piano di test deve essere proporzionato "
             "al sistema analizzato. NON includere sezioni di metodologia generica "
             "(cos'è un test di regressione, strategia di test in astratto, "
@@ -239,8 +279,12 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "logici di scomposizione.\n"
             "2. Gli Architectural Decision Records (ADR) che motivano formalmente la "
             "scelta dei nuovi pattern di design, la struttura delle cartelle, i "
-            "modelli database e lo standard delle API nel nuovo sistema target."
-            "\n\nCODICE SORGENTE LEGACY (evidenza primaria):\n"
+            "modelli database e lo standard delle API nel nuovo sistema target.\n"
+            "3. La STRUTTURA DELLA SOLUTION: l'elenco esatto dei progetti che "
+            "comporranno il sistema target. E' la decisione che il cliente approva "
+            "al Check Point 2, PRIMA che venga scritta una riga di codice.\n"
+            + STRUTTURA_SOLUTION_RULES
+            + "\n\nCODICE SORGENTE LEGACY (evidenza primaria):\n"
             "In caso di discrepanza tra la documentazione della fase precedente "
             "e il codice, fa fede il codice. Non attribuire al sistema componenti, "
             "tabelle o campi che non trovi qui.\n"
@@ -267,7 +311,11 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "sezioni che non svilupperai, non inserire rinvii a sezioni "
             "inesistenti, e concludi il testo prima di esaurire lo spazio. "
             "Meglio 5 sezioni piene di contenuto specifico che 8 riempite di "
-            "prassi generiche."
+            "prassi generiche. "
+            "OBBLIGATORIO: il documento deve contenere la sezione "
+            "'### STRUTTURA SOLUTION' nel formato indicato, con l'elenco puntato "
+            "dei progetti. E' la parte che il cliente approva e che guida la "
+            "generazione del codice: senza, la Fase 3 inventa una struttura propria."
         ),
         agent=agents["cloud_solutions_architect"],
         output_file=f"{output_dir}/{FILE_MIGRATION_PLAN}",
@@ -284,7 +332,19 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "2. Converti i vecchi tipi di dato FoxPro/Legacy nei tipi SQL moderni "
             "più adeguati.\n"
             "3. Produci uno script DDL completo con le istruzioni `CREATE TABLE`.\n"
-            "4. Aggiungi i `CREATE INDEX` necessari per ottimizzare le query future.\n\n"
+            "4. Aggiungi i `CREATE INDEX` necessari per ottimizzare le query future.\n"
+            "5. Apri il file con una MAPPA DI MIGRAZIONE DEI DATI, in commenti SQL, "
+            "che dichiari per ogni tabella nuova da quali file/tabelle legacy deriva "
+            "e con quale criterio. Usa questo formato, una riga per tabella:\n"
+            "--   nuova_tabella  <--  origine1.dbf, origine2.dbf  |  criterio\n"
+            "Il criterio spiega COSA e' successo: 'copia normalizzata', "
+            "'fusione: teamprop portava le proprieta', teamlog lo storico', "
+            "'scissione: la testata resta qui, le righe vanno in movmag_righe', "
+            "'nuova: non esisteva nel legacy, serve per <motivo>'.\n"
+            "Elenca in fondo alla mappa le tabelle legacy NON migrate, con il "
+            "motivo (dati temporanei, duplicati, obsoleti): il cliente deve poter "
+            "verificare che nulla sia sparito senza una ragione.\n"
+            "Ripeti poi l'origine come commento sopra ogni singola CREATE TABLE.\n\n"
             "IMPORTANTE: l'output deve essere SOLO SQL valido (con commenti `--` "
             "dove serve), senza testo Markdown attorno, perché verrà salvato come "
             "file .sql eseguibile."
@@ -304,7 +364,11 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
         )+ _nota_data(),
         expected_output=(
             "Uno script SQL formattato correttamente contenente le istruzioni DDL "
-            "per la creazione del nuovo database relazionale."
+            "per la creazione del nuovo database relazionale, preceduto dalla "
+            "MAPPA DI MIGRAZIONE DEI DATI in commenti SQL. La mappa e' "
+            "OBBLIGATORIA: senza, il cliente non ha modo di sapere che fine ha "
+            "fatto ciascuna delle sue tabelle, e la migrazione dei dati diventa "
+            "un lavoro di ricostruzione a posteriori."
             "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
             "deve essere COMPLETO: non annunciare nell'indice sezioni che non "
             "svilupperai, e concludi il testo prima di esaurire lo spazio "
@@ -345,6 +409,7 @@ def get_iterative_implementation_tasks(
     contesto_funzionale="",
     contesto_test="",
     tipi_gia_generati=None,
+    progetti_esistenti=None,
 ):
     """
     Genera i task dinamicamente per UN SINGOLO file legacy,
@@ -362,6 +427,44 @@ def get_iterative_implementation_tasks(
     safe_funzionale = _escape_braces(contesto_funzionale)
     safe_test = _escape_braces(contesto_test)
 
+    if progetti_esistenti:
+        elenco_prog = ", ".join(sorted(progetti_esistenti))
+        blocco_progetti = f"""
+        ARCHITETTURA APPROVATA DAL CLIENTE — USA QUESTI PROGETTI, NON CREARNE ALTRI:
+        {_escape_braces(elenco_prog)}
+        Ogni file che produci deve stare in UNO di questi progetti. NON
+        inventare nomi nuovi, NON aggiungere suffissi tipo "Modernized",
+        "New" o "WebApi", NON alternare punti e underscore: `Fox.Warehouse` e
+        `Fox_Warehouse` diventerebbero due progetti distinti per la stessa
+        cosa, e la solution non si compila piu'.
+        Questa struttura e' stata decisa in fase di progettazione e APPROVATA
+        dal cliente al Check Point 2: non e' una proposta, e' un vincolo.
+        Solo se una funzionalita' non ha davvero posto in nessuno di essi puoi
+        aggiungere un progetto, seguendo ESATTAMENTE la stessa convenzione di
+        nomi di quelli elencati.
+"""
+    else:
+        # Primo file della fase: qui l'architettura si DECIDE. I nomi scelti
+        # ora diventano vincolanti per tutti i file successivi.
+        blocco_progetti = f"""
+        SEI IL PRIMO FILE DELLA MIGRAZIONE: definisci ORA la struttura della
+        solution, e varra' per tutti i file successivi.
+
+        REGOLA DI STRUTTURA (vale per QUALSIASI progetto, di qualsiasi
+        dimensione): dividi per STRATO, non per funzionalita'. Massimo
+        {MAX_PROGETTI_ATTESI} progetti in tutto, con nomi del tipo:
+          <Prodotto>.Api            (endpoint e controller)
+          <Prodotto>.Application    (casi d'uso, servizi applicativi)
+          <Prodotto>.Domain         (entita' e regole di business)
+          <Prodotto>.Infrastructure (accesso a dati e sistemi esterni)
+
+        Le aree funzionali del sistema legacy (magazzino, personale,
+        contabilita'...) diventano CARTELLE dentro questi progetti, MAI
+        progetti separati: il numero di progetti non deve crescere con il
+        numero di file migrati. Una sola convenzione di separatori: usa il
+        punto, mai l'underscore.
+"""
+
     if tipi_gia_generati:
         elenco = ", ".join(sorted(tipi_gia_generati)[:150])
         blocco_tipi_esistenti = f"""
@@ -373,6 +476,8 @@ def get_iterative_implementation_tasks(
 """
     else:
         blocco_tipi_esistenti = ""
+
+    blocco_tipi_esistenti = blocco_progetti + blocco_tipi_esistenti
 
     backend_task = Task(
         description=f"""
@@ -559,6 +664,17 @@ def get_validation_task(agent, output_dir, nome_fase, output_filename):
             "rilievo il fatto che il testo si interrompa, né che il codice "
             "risulti tagliato o non compilabile: sarebbe un difetto del nostro "
             "estratto, non del deliverable. Valuta solo ciò che PUOI vedere.\n"
+            "   Se fra i documenti c'e' un inventario, verifica che si apra con "
+            "il PROSPETTO QUANTITATIVO e che ogni tipologia abbia la sua tabella "
+            "con una riga per file. Un inventario che descrive solo gli esempi "
+            "piu' rappresentativi lascia il cliente senza sapere se il SUO file "
+            "e' stato analizzato: segnalalo.\n"
+            "   Se fra i documenti c'e' uno schema di database, verifica che "
+            "contenga la MAPPA DI MIGRAZIONE DEI DATI e che ogni tabella legacy "
+            "citata nell'analisi vi compaia — come migrata oppure come "
+            "esplicitamente esclusa con motivo. Una tabella che sparisce senza "
+            "spiegazione e' un rilievo grave: significa dati che il cliente "
+            "scoprira' mancanti solo a migrazione avvenuta.\n"
             "2. COERENZA INTERNA: i documenti si contraddicono tra loro? "
             "I riferimenti incrociati (nomi di file, tabelle, moduli) coincidono?\n"
             "3. AFFIDABILITÀ: ci sono affermazioni generiche o non supportate dal "

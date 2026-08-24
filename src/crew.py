@@ -25,6 +25,7 @@ from src.config import (
     FILE_TEST_BOOK,
     QA_CHUNK_MAX_CHARS,
     QA_MAX_CHUNK_ATTESI,
+    MAX_PROGETTI_ATTESI,
     FILE_VALIDATION_FASE1,
     FILE_VALIDATION_FASE2,
     FILE_VALIDATION_FASE3,
@@ -342,6 +343,23 @@ def _normalizza_percorsi(testo, registro_cartelle, e_frontend):
             registro_cartelle[chiave] = segmento
         return registro_cartelle[chiave]
 
+    def _canonica_progetto(segmento):
+        """
+        Nome del progetto (primo segmento dopo la radice), unificato anche
+        quando cambia il SEPARATORE.
+
+        Ogni file legacy viene migrato in una passata indipendente e l'agente
+        reinventa ogni volta la propria convenzione: su un progetto reale sono
+        comparsi `RUM.Modernized.Api`, `RUM_Modernized.Api` e
+        `RUM_Modernized.WebApi` come tre progetti distinti per la stessa cosa.
+        Punti e underscore vengono equiparati, cosi' la prima forma vista fa
+        da riferimento per tutte le successive.
+        """
+        chiave = segmento.lower().replace("_", ".")
+        if chiave not in registro_cartelle:
+            registro_cartelle[chiave] = segmento
+        return registro_cartelle[chiave]
+
     def _sistema(match):
         nonlocal conteggio
         originale = match.group(2).strip()
@@ -361,7 +379,13 @@ def _normalizza_percorsi(testo, registro_cartelle, e_frontend):
         e_test = any(p.lower().endswith((".tests", ".integrationtests", ".unittests"))
                      for p in parti)
 
-        cartelle = [_canonica(p) for p in parti[:-1]]
+        # Il PRIMO segmento e' il nome del progetto e va unificato con regole
+        # piu' larghe (punti e underscore equivalenti); gli altri sono
+        # cartelle interne, dove conta solo la differenza di maiuscole.
+        if len(parti) > 1:
+            cartelle = [_canonica_progetto(parti[0])] + [_canonica(p) for p in parti[1:-1]]
+        else:
+            cartelle = []
         nuovo = "/".join((["tests"] if e_test else ["src"]) + [radice_area] + cartelle + [parti[-1]])
 
         if nuovo != originale:
@@ -524,6 +548,67 @@ def _vale_un_secondo_tentativo(errore):
     return any(s in testo for s in vale_la_pena)
 
 
+def _progetti_dal_migration_plan(output_dir):
+    """
+    Progetti dichiarati dall'architetto nella sezione '### STRUTTURA SOLUTION'
+    del migration plan, e APPROVATI dal cliente al Check Point 2.
+
+    E' la fonte autorevole della struttura: la Fase 3 non deve inventarla,
+    deve rispettarla. Se il cliente ha modificato il documento al checkpoint
+    (rinominando un progetto, togliendone uno), qui si legge la sua versione
+    — il documento e' la fonte, non una copia salvata a parte.
+
+    Se la sezione manca si torna al comportamento precedente: il primo file
+    migrato definisce la struttura per tutti gli altri.
+    """
+    testo = _read_if_exists(f"{output_dir}/{FILE_MIGRATION_PLAN}", "")
+    if not testo:
+        return set()
+
+    # Dalla riga dell'intestazione fino alla prossima intestazione di pari
+    # livello: si legge solo l'elenco, non il resto del documento.
+    blocco = re.search(r"#+\s*STRUTTURA\s+SOLUTION\s*\n(.*?)(?=\n#{1,3}\s|\Z)",
+                       testo, re.IGNORECASE | re.DOTALL)
+    if not blocco:
+        logger.info("Migration plan senza sezione 'STRUTTURA SOLUTION': "
+                    "la struttura sara' definita dal primo file migrato.")
+        return set()
+
+    progetti = set()
+    for riga in blocco.group(1).splitlines():
+        # `- Nome.Progetto - descrizione` oppure `- **Nome.Progetto**: ...`
+        m = re.match(r"\s*[-*+]\s*\**\s*([A-Za-z][A-Za-z0-9._]{2,60})\**\s*[-:–]", riga)
+        if m:
+            progetti.add(m.group(1).strip(". "))
+    if progetti:
+        logger.info("Struttura approvata dal migration plan: %s", sorted(progetti))
+    return progetti
+
+
+def _progetti_dichiarati(testo):
+    """
+    Nomi dei progetti gia' creati, letti dai percorsi `/// FILEPATH:`.
+
+    Servono a dire all'agente successivo quale architettura ESISTE gia'.
+    Senza, ogni file migrato ne inventa una nuova: su un applicativo da 129
+    file sono nati decine di progetti sovrapposti (`RUM.API`,
+    `RUM.Modernized.Api`, `RUM_Modernized.WebApi`... per la stessa cosa),
+    rendendo la solution inutilizzabile pur essendo il codice corretto.
+
+    Il primo file fa da guida: chi viene dopo riusa, non reinventa.
+    """
+    progetti = set()
+    for percorso in re.findall(r"///\s*FILEPATH:\s*(.+)", testo or ""):
+        parti = [p for p in percorso.strip().replace("\\", "/").split("/") if p]
+        # Si salta la radice (src/backend, tests/frontend...) e si prende il
+        # segmento successivo, che e' il nome del progetto.
+        while parti and parti[0].lower() in ("src", "tests", "test", "backend", "frontend"):
+            parti.pop(0)
+        if len(parti) > 1:
+            progetti.add(parti[0])
+    return progetti
+
+
 def _tipi_dichiarati(testo):
     """
     Nomi di classi/interfacce/record dichiarati in un output generato.
@@ -568,15 +653,19 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
     # punto in cui il sorgente completo e' in memoria. Il marcatore usato dal
     # raccoglitore permette di contare anche quanti file lo compongono.
     testo_legacy = codice_legacy or ""
+    numero_file = testo_legacy.count("----- FILE:")
     _salva_metriche(
         session_id,
         righe_legacy=testo_legacy.count("\n") + 1 if testo_legacy else 0,
         caratteri_legacy=len(testo_legacy),
-        file_legacy_analizzati=testo_legacy.count("----- FILE:") or None,
+        file_legacy_analizzati=numero_file or None,
     )
 
     agents = create_agents(llm)
-    tasks = get_understanding_tasks(agents, output_dir)
+    # Il numero di file regola l'ampiezza attesa dei documenti: su un sistema
+    # da centinaia di file gli agenti devono coprire tutte le aree funzionali,
+    # non comprimere tutto nello spazio pensato per un applicativo piccolo.
+    tasks = get_understanding_tasks(agents, output_dir, numero_file=numero_file)
     annuncia_avvio, task_callback = crea_logger_attivita(
         session_id, tasks, etichetta="Fase 1 · Understanding"
     )
@@ -781,9 +870,21 @@ def run_implementation_phase(
     # ridefiniti. In caso di resume si rileggono dai file gia' scritti, cosi'
     # il riavvio non riparte "senza memoria" di cosa esiste.
     tipi_generati = set()
+    # Progetti: la struttura DECISA in Fase 2 e approvata dal cliente al
+    # Check Point 2 ha la precedenza. Solo se manca si torna al vecchio
+    # comportamento, in cui il primo file migrato la definisce per tutti.
+    progetti_generati = _progetti_dal_migration_plan(output_dir)
+    if progetti_generati:
+        log_message(
+            session_id,
+            f"🏛️ Struttura approvata al Check Point 2: {len(progetti_generati)} progetti "
+            f"({', '.join(sorted(progetti_generati))}).",
+        )
     if processati:
         tipi_generati |= _tipi_dichiarati(_read_if_exists(percorso_backend, ""))
         tipi_generati |= _tipi_dichiarati(_read_if_exists(percorso_frontend, ""))
+        progetti_generati |= _progetti_dichiarati(_read_if_exists(percorso_backend, ""))
+        progetti_generati |= _progetti_dichiarati(_read_if_exists(percorso_frontend, ""))
 
     # Forma canonica delle cartelle, condivisa fra TUTTI i file della fase:
     # senza, ogni passata sceglie le proprie maiuscole e nascono Dtos/ e DTOs/.
@@ -838,6 +939,7 @@ def run_implementation_phase(
                 contesto_funzionale=funzionale,
                 contesto_test=test,
                 tipi_gia_generati=tipi_generati,
+                progetti_esistenti=progetti_generati,
             )
             etichetta = f"file {indice}/{totale}: {nome_file}"
             if alleggerito:
@@ -936,9 +1038,26 @@ def run_implementation_phase(
             # Checkpoint SOLO dopo la scrittura riuscita su entrambi i file
             processati.add(nome_file)
             _save_checkpoint(percorso_checkpoint, processati)
-            # I tipi appena prodotti diventano contesto per i file successivi.
+            # Tipi e progetti appena prodotti diventano contesto per i file
+            # successivi: e' cosi' che il primo file guida tutti gli altri.
             tipi_generati |= _tipi_dichiarati(output_backend)
             tipi_generati |= _tipi_dichiarati(output_frontend)
+            progetti_generati |= _progetti_dichiarati(output_backend)
+            progetti_generati |= _progetti_dichiarati(output_frontend)
+
+            # Avviso una volta sola, quando la soglia viene superata: oltre
+            # questo numero la solution non e' piu' apribile senza riordinarla,
+            # e il numero di progetti NON deve crescere con i file migrati.
+            if len(progetti_generati) == MAX_PROGETTI_ATTESI + 1:
+                log_message(
+                    session_id,
+                    f"⚠️ La solution ha superato i {MAX_PROGETTI_ATTESI} progetti attesi "
+                    f"({len(progetti_generati)}): gli agenti stanno creando una struttura "
+                    "per funzionalita' invece che per strato. Il codice resta valido, "
+                    "ma la struttura andra' riorganizzata.",
+                )
+                logger.warning("Proliferazione progetti: %s", sorted(progetti_generati))
+
             esiti["completati"].append(nome_file)
             log_message(
                 session_id,

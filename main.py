@@ -73,7 +73,30 @@ class MascheraChiaviURL(logging.Filter):
 
 # Sul logger "httpx", non sul root: i filtri NON si propagano ai logger figli,
 # quindi applicarlo altrove non avrebbe alcun effetto.
-logging.getLogger("httpx").addFilter(MascheraChiaviURL())
+def _applica_maschera_chiavi():
+    """
+    Applica il filtro agli HANDLER, non a un singolo logger.
+
+    Un filtro su logging.getLogger("httpx") cattura solo cio' che passa da
+    quel logger: se domani LiteLLM, urllib3 o un'altra libreria registrasse
+    un URL con la chiave in query string, non verrebbe mascherata. Sugli
+    handler passa invece TUTTO cio' che viene scritto.
+
+    Va richiamata anche dopo l'avvio: uvicorn installa i propri handler
+    quando importa l'app, quindi un aggancio fatto solo a import-time
+    potrebbe non coprirli.
+    """
+    maschera = MascheraChiaviURL()
+    for logger_nome in ("", "httpx", "uvicorn", "uvicorn.error", "uvicorn.access", "LiteLLM"):
+        obiettivo = logging.getLogger(logger_nome)
+        if not any(isinstance(f, MascheraChiaviURL) for f in obiettivo.filters):
+            obiettivo.addFilter(maschera)
+        for handler in obiettivo.handlers:
+            if not any(isinstance(f, MascheraChiaviURL) for f in handler.filters):
+                handler.addFilter(maschera)
+
+
+_applica_maschera_chiavi()
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +143,16 @@ app.include_router(affiliazione_router)
 
 #Statistiche
 app.include_router(statistiche_router)
+
+@app.on_event("startup")
+def _riapplica_maschera_chiavi():
+    """
+    Uvicorn installa i propri handler DOPO l'import del modulo: senza questa
+    seconda applicazione il filtro coprirebbe solo gli handler esistenti a
+    import-time, e una chiave API potrebbe comparire in chiaro nei log.
+    """
+    _applica_maschera_chiavi()
+
 
 @app.on_event("startup")
 def _sblocca_sessioni_orfane():
@@ -419,7 +452,16 @@ def require_admin(user_id: str = Depends(get_current_user)):
 @app.post("/api/v1/modernize/prepara/{session_id}")
 def prepara_sorgenti(
     session_id: str,
+    background: BackgroundTasks,
     file: UploadFile = File(...),
+    # Provider e modello scelti dall'utente: la pre-selezione deve girare
+    # sul SUO modello, non su uno fisso. I default coprono i client datati
+    # che non li inviano ancora.
+    provider_llm: str = Form(""),
+    modello_llm: str = Form(""),
+    # Il nome serve gia' qui: la sessione viene registrata prima dell'analisi
+    # e senza di esso comparirebbe senza nome in "I Miei Progetti".
+    session_name: str = Form(""),
     user_id: str = Depends(get_current_user_and_validate_license),
 ):
     """
@@ -447,9 +489,45 @@ def prepara_sorgenti(
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Il file non è un archivio ZIP valido o è corrotto.")
 
+    # Backup dedicato dei sorgenti, UNA volta sola: non cambiano piu' e non
+    # devono finire negli zip di fase, che il cliente scarica.
+    #
+    # In BACKGROUND: comprimere e caricare decine di MB richiede minuti, e
+    # farlo prima di rispondere significa lasciare il cliente davanti a uno
+    # spinner per tutto il tempo. L'elenco dei file non dipende dal backup,
+    # quindi puo' partire subito; il backup serve solo a un eventuale
+    # ripristino DOPO un riavvio, che nel frattempo non e' ancora possibile.
+    background.add_task(storage.salva_sorgenti, session_id, str(cartella_output))
+
+    # La sessione va registrata ORA, non all'avvio della Fase 1: il consumo
+    # della pre-selezione viene addebitato qui, e il movimento su
+    # token_transactions fa riferimento a questa sessione. E' un upsert, e
+    # l'avvio della fase la sovrascrive con nome e impostazioni definitive.
+    try:
+        supabase.table("migration_sessions").upsert({
+            "id": session_id,
+            "user_id": user_id,
+            "session_name": session_name or "Progetto senza nome",
+            "current_step": "input",
+            "provider_llm": provider_llm or None,
+            "modello_llm": modello_llm or None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as e:
+        # Non blocca: l'analisi puo' proseguire, al massimo il movimento
+        # token non verra' collegato alla sessione.
+        logger.warning("Registrazione anticipata della sessione %s fallita: %s", session_id, e)
+
+    # La classificazione dei file e' una chiamata LLM come le altre: va
+    # contabilizzata, altrimenti su archivi grandi il costo resta a carico
+    # della piattaforma.
+    tracker = TokenUsageTracker(modello_llm)
     elenco = analizza_sorgenti(
         str(cartella_sorgenti), ESCLUDI_CARTELLE, ESTENSIONI_VALIDE, MAX_FILE_SIZE,
+        provider=provider_llm or None, modello=modello_llm or None, tracker=tracker,
     )
+    _chiudi_conteggio_token(user_id, tracker, session_id)
+
     if not elenco:
         raise HTTPException(
             status_code=400,
@@ -577,7 +655,12 @@ def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
         )
 
         log_message(session_id, "🗜️ Generazione del pacchetto ZIP del codice e dei report in corso...")
-        percorso_zip = _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase1"), str(cartella_output))
+        # I sorgenti restano fuori: sono decine di MB che il cliente ha gia'
+        # caricato lui, e hanno un backup dedicato su Storage per la Fase 3.
+        percorso_zip = _crea_zip_fase(
+            str(WORKSPACE_DIR / f"{session_id}_fase1"), str(cartella_output),
+            escludi_cartelle=("sorgenti_originali",),
+        )
         storage.salva_zip_fase(session_id, "fase1", percorso_zip)
 
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)

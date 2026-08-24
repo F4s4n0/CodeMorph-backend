@@ -265,3 +265,48 @@ SOGLIA_MASSIMA_PAYPAL_EUR = Decimal("14950.00")
 # nessuno vede le interazioni fra le parti. Superarlo di norma significa che
 # gli agenti stanno duplicando codice, non che il progetto e' grande.
 QA_MAX_CHUNK_ATTESI = 5
+
+# Numero massimo di PROGETTI attesi nella solution generata.
+# La Fase 3 migra un file legacy per volta e ogni passata tende a inventare
+# la propria architettura: su un applicativo da 129 file sono nati decine di
+# progetti sovrapposti (RUM.API, RUM.Modernized.Api, RUM_Modernized.WebApi...)
+# per le stesse funzionalita', rendendo la solution inapribile.
+# L'architettura si divide per STRATO (Api, Application, Domain,
+# Infrastructure), non per file migrato: il numero di progetti non deve
+# dipendere da quanti file si migrano.
+MAX_PROGETTI_ATTESI = 6
+
+# --- Struttura della solution, decisa in FASE 2 e approvata dal cliente ---
+# Nasce da un difetto reale: la Fase 3 migra un file per volta e ogni passata
+# inventava la propria architettura. Su un applicativo da 129 file sono nati
+# decine di progetti sovrapposti per le stesse funzionalita', e la solution
+# non si apriva. La struttura va decisa UNA volta, da chi progetta, e il
+# cliente la approva al Check Point 2 prima che si scriva codice.
+STRUTTURA_SOLUTION_RULES = (
+    "\n\nSTRUTTURA DELLA SOLUTION (SEZIONE OBBLIGATORIA DEL DOCUMENTO):\n"
+    "Includi una sezione con questa intestazione ESATTA:\n"
+    "### STRUTTURA SOLUTION\n"
+    "seguita da un elenco puntato con un progetto per riga, nella forma\n"
+    "`- Nome.Progetto` seguito da un trattino e una riga di descrizione.\n"
+    "\n"
+    "REGOLE (valide per qualsiasi sistema, di qualsiasi dimensione):\n"
+    f"- MASSIMO {MAX_PROGETTI_ATTESI} progetti in tutto.\n"
+    "- Dividi per STRATO, non per funzionalita': Api (endpoint), Application \n"
+    "  (casi d'uso), Domain (entita' e regole), Infrastructure (dati e sistemi \n"
+    "  esterni), Shared (contratti e DTO condivisi, solo se servono \n"
+    "  davvero), piu' un progetto di test.\n"
+    "- Le aree funzionali del legacy (magazzino, personale, contabilita'...) \n"
+    "  diventano CARTELLE dentro questi progetti, MAI progetti separati: il \n"
+    "  numero di progetti non deve dipendere da quanti file si migrano.\n"
+    "- Una sola convenzione di separatori: usa il punto, mai l'underscore.\n"
+    "- Nomi definitivi: saranno usati alla lettera nella generazione del codice.\n"
+    "\n"
+    "Esempio di formato atteso:\n"
+    "### STRUTTURA SOLUTION\n"
+    "- Contoso.Api - Endpoint REST e configurazione dell'applicazione\n"
+    "- Contoso.Application - Casi d'uso e servizi applicativi\n"
+    "- Contoso.Domain - Entita' di dominio e regole di business\n"
+    "- Contoso.Infrastructure - Accesso ai dati e integrazioni esterne\n"
+    "- Contoso.Shared - Contratti e DTO condivisi fra i progetti\n"
+    "- Contoso.Tests - Test unitari e di integrazione\n"
+)
