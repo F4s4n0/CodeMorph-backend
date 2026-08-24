@@ -74,6 +74,26 @@ def _e_testo_leggibile(percorso):
     return not _sembra_binario(percorso)
 
 
+def _e_tabella_dbf(percorso):
+    """
+    True se il file ha un header DBF valido, qualunque sia l'estensione.
+
+    Nel mondo legacy moltissimi formati sono DBF travestiti: in FoxPro lo sono
+    Form, Class Library, Menu, Report, Etichette, Progetti e Database
+    Container; fuori da FoxPro lo sono dBase, Clipper e vari gestionali.
+    Invece di elencare le estensioni — elenco che sarebbe sempre incompleto —
+    si prova ad aprirlo: se e' un DBF il contenuto e' recuperabile, e il file
+    va proposto SELEZIONATO invece che scartato come "binario illeggibile".
+    """
+    try:
+        from dbfread import DBF
+        tabella = DBF(percorso, load=False, ignore_missing_memofile=True,
+                      char_decode_errors="ignore")
+        return bool(tabella.fields)
+    except Exception:
+        return False
+
+
 def _escluso_da_pattern(percorso_relativo):
     """
     Esclusione statica per pattern di nome: codice generato, minificati,
@@ -248,6 +268,16 @@ def analizza_sorgenti(cartella_sorgenti, escludi_cartelle, estensioni_valide, ma
                         "motivo": "Estensione non riconosciuta: il contenuto sembra testo, "
                                   "includilo se contiene codice.",
                     })
+                elif _e_tabella_dbf(percorso_assoluto):
+                    # Formato sconosciuto ma leggibile: e' un DBF travestito
+                    # (report, etichette, progetto...). Si propone INCLUSO
+                    # perche' il contenuto e' recuperabile davvero.
+                    candidati.append({
+                        "file": relativo,
+                        "dimensione": dimensione,
+                        "incluso": True,
+                        "motivo": None,
+                    })
                 else:
                     ignorati += 1
                 continue
@@ -275,6 +305,15 @@ def analizza_sorgenti(cartella_sorgenti, escludi_cartelle, estensioni_valide, ma
             # I formati FoxPro con estrattore dedicato sono binari per natura
             # e vanno lasciati passare.
             if estensione not in ESTENSIONI_CON_ESTRATTORE and _sembra_binario(percorso_assoluto):
+                if _e_tabella_dbf(percorso_assoluto):
+                    # Binario si', ma leggibile: e' una tabella DBF.
+                    candidati.append({
+                        "file": relativo,
+                        "dimensione": dimensione,
+                        "incluso": True,
+                        "motivo": None,
+                    })
+                    continue
                 candidati.append({
                     "file": relativo,
                     "dimensione": dimensione,

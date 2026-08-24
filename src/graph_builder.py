@@ -287,6 +287,63 @@ def extract_foxpro_dbf_schema(file_path):
         return f"Errore durante l'estrazione dello schema DBF: {e}"
 
 
+def tenta_lettura_come_dbf(file_path):
+    """
+    Ultimo tentativo su un binario di formato SCONOSCIUTO: provare ad aprirlo
+    come tabella DBF.
+
+    Nel mondo legacy moltissimi formati sono DBF travestiti — in FoxPro lo
+    sono le Form (.scx), le Class Library (.vcx), i Menu (.mnx), i Report
+    (.frx), le Etichette (.lbx), i Progetti (.pjx) e i Database Container
+    (.dbc); fuori da FoxPro lo sono dBase, Clipper e diversi gestionali
+    proprietari.
+
+    Invece di elencare ogni estensione — che sarebbe un elenco sempre
+    incompleto — si TENTA. Se il file ha un header DBF valido si estrae quello
+    che c'e' dentro; altrimenti si restituisce None e il file resta escluso
+    con il suo motivo, come prima.
+
+    E' il modo per essere generalisti senza scrivere un parser per ogni
+    formato: costa un tentativo fallito sui binari veri, e recupera contenuto
+    reale su tutti i DBF che non conosciamo.
+    """
+    try:
+        table = DBF(file_path, ignore_missing_memofile=True, char_decode_errors="ignore")
+        campi = [f.name for f in table.fields]
+        if not campi:
+            return None
+    except Exception:
+        return None          # non e' un DBF: nessun rumore nei log
+
+    nome = os.path.basename(file_path)
+    parti = [f"--- STRUTTURA DBF RICONOSCIUTA: {nome} ---",
+             f"Campi: {', '.join(campi)}"]
+
+    # I campi memo di questi formati contengono il codice: se ci sono, si
+    # estraggono come si fa per le Form.
+    campi_memo = [f.name for f in table.fields if f.type in ("M", "G")]
+    if campi_memo:
+        estratti = 0
+        try:
+            for record in table:
+                for campo in campi_memo:
+                    contenuto = str(record.get(campo) or "").strip()
+                    if len(contenuto) > 20:
+                        etichetta = str(record.get("OBJNAME") or record.get("NAME")
+                                        or record.get("PROMPT") or f"record {estratti + 1}")
+                        parti.append(f"\n*** {etichetta} | campo {campo} ***")
+                        parti.append(contenuto)
+                        estratti += 1
+        except Exception as e:
+            parti.append(f"[lettura dei memo interrotta: {type(e).__name__}]")
+        if estratti:
+            logger.info("Formato sconosciuto %s letto come DBF: %d blocchi di contenuto.",
+                        nome, estratti)
+
+    parti.append("--- FINE ---\n")
+    return "\n".join(parti)
+
+
 # =====================================================================
 # Estrazione dipendenze via micro-agente
 # =====================================================================
@@ -413,6 +470,13 @@ def _estrai_contenuto_file(file_path, estensione, session_id):
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             contenuto = f.read()
         if _sembra_binario(contenuto):
+            # Prima di arrendersi: moltissimi formati legacy sono DBF
+            # travestiti (report, etichette, progetti, database container).
+            # Se lo e', se ne estrae il contenuto invece di perderlo.
+            recuperato = tenta_lettura_come_dbf(file_path)
+            if recuperato:
+                log_message(session_id, f"{file}: formato binario riconosciuto come tabella DBF, contenuto estratto.")
+                return recuperato
             # Alcuni formati esistono in due varianti: un .dfm Delphi puo'
             # essere testo o binario a seconda di come e' stato salvato.
             # Passarlo agli agenti come testo significherebbe riempire il
