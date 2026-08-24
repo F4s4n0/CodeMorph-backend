@@ -280,9 +280,59 @@ FILE_ESCLUSI_DALLO_ZIP = {
     "live_logs.txt",                   # log live: serve al terminale del frontend, non al deliverable
     "solution_upload.zip",             # copia dello zip caricato dall'utente: ce l'ha già
     "_implementation_checkpoint.json", # stato interno del resume della Fase 3
-    "_file_selezionati.json",          # lista file selezionati dall'utente in fase di upload
     "_segreti.json",                   # credenziali rilevate nei sorgenti: MAI consegnarle
+    # _file_selezionati.json NON e' piu' escluso: serve al cliente come prova
+    # di cosa ha scelto, e soprattutto deve sopravvivere a un riavvio di
+    # Render. Essendo escluso dallo zip spariva dal backup, e la Fase 3 —
+    # ripartendo da una sessione ripristinata — non lo trovava piu' e migrava
+    # TUTTI i file invece dei soli selezionati.
 }
+
+def _scrivi_elenco_selezione(cartella_output, ammessi, nome_progetto=""):
+    """
+    Documento leggibile con i file scelti per l'analisi.
+
+    Il cliente sceglie in una schermata e poi non ne ha piu' traccia: se un
+    modulo non compare nei documenti finali, non ha modo di sapere se e' stato
+    escluso da lui o ignorato dal sistema. Qui trova l'elenco esatto, raggruppato
+    per tipo, con i totali.
+    """
+    per_estensione = {}
+    for percorso in sorted(ammessi):
+        estensione = (os.path.splitext(percorso)[1] or "(senza estensione)").lower()
+        per_estensione.setdefault(estensione, []).append(percorso)
+
+    righe = [
+        "# File selezionati per l'analisi",
+        "",
+        f"**Progetto:** {nome_progetto or 'senza nome'}  ",
+        f"**Data:** {datetime.now(timezone.utc).strftime('%d/%m/%Y')}  ",
+        f"**Totale file analizzati:** {len(ammessi)}",
+        "",
+        "Questo e' l'elenco esatto dei file su cui hanno lavorato gli agenti.",
+        "I file non presenti erano stati esclusi in fase di selezione e non",
+        "compaiono nei documenti prodotti.",
+        "",
+        "## Riepilogo per tipologia",
+        "",
+        "| Tipo | N. file |",
+        "|---|---|",
+    ]
+    for estensione, elenco in sorted(per_estensione.items(), key=lambda x: -len(x[1])):
+        righe.append(f"| `{estensione}` | {len(elenco)} |")
+
+    righe.append("")
+    righe.append("## Elenco completo")
+    for estensione, elenco in sorted(per_estensione.items(), key=lambda x: -len(x[1])):
+        righe.append("")
+        righe.append(f"### `{estensione}` — {len(elenco)} file")
+        righe.append("")
+        for percorso in elenco:
+            righe.append(f"- `{percorso}`")
+
+    with open(os.path.join(str(cartella_output), "0_File_Selezionati.md"), "w", encoding="utf-8") as f:
+        f.write("\n".join(righe) + "\n")
+
 
 def _crea_zip_fase(percorso_base_senza_estensione, cartella_sessione, escludi_cartelle=()):
     """
@@ -615,6 +665,14 @@ def fase1_understand(
                 json.dump(ammessi, f)
         except Exception as e:
             logger.warning("Selezione file non salvata per %s: %s", session_id, e)
+
+        # Versione leggibile per il cliente: un JSON con centinaia di percorsi
+        # e' una prova, non un documento. Cosi' puo' verificare in un colpo
+        # d'occhio che l'analisi abbia coperto quello che si aspettava.
+        try:
+            _scrivi_elenco_selezione(cartella_output, ammessi, session_name)
+        except Exception as e:
+            logger.warning("Elenco file selezionati non scritto per %s: %s", session_id, e)
 
     # IMPORTANTE: il file caricato va salvato ORA. Dopo la risposta HTTP
     # lo stream di UploadFile viene chiuso e il background non lo vedrebbe più.

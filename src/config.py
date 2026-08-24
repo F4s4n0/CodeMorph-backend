@@ -63,7 +63,7 @@ FILE_SELEZIONE = "_file_selezionati.json"
 # Codice sorgente passato agli agenti della Fase 1 insieme al grafo.
 # Senza, gli agenti documentano solo l'elenco delle dipendenze e non
 # possono citare funzioni, variabili o logica reale.
-MAX_CARATTERI_SORGENTI = 300_000
+MAX_CARATTERI_SORGENTI = 600_000
 
 # File generati automaticamente o senza logica di business: esclusi PRIMA
 # di arrivare al modello, quindi a costo zero. (pattern, motivo mostrato)
