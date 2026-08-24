@@ -27,7 +27,7 @@ from auth import _parse_expiry, get_current_user, get_current_user_and_validate_
 from payments import addebita_consumo_token, addebita_importo_token, verifica_credito_token
 from payments import router as payments_router
 from src.code_unpacker import unpack_markdown_to_files
-from src.config import FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_SELEZIONE, WORKSPACE_DIR
+from src.config import FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_SELEZIONE, MODELLO_PREDEFINITO, WORKSPACE_DIR
 from src.crew import run_understanding_phase, run_design_phase, run_implementation_phase
 from src.graph_builder import (
     ESTENSIONI_VALIDE,
@@ -183,18 +183,23 @@ def _sblocca_sessioni_orfane():
 # Modelli di input
 # =====================================================================
 
+# provider e modello NON hanno un default cablato: se il client non li invia
+# (pagina ricaricata, sessione ripresa da un altro dispositivo) si leggono
+# dalla sessione su database. Con un default fisso le fasi 2 e 3 giravano su
+# Anthropic anche quando il cliente aveva scelto Google, e se le vedeva
+# fatturare come tali.
 class InputFase2(BaseModel):
     session_id: str
     linguaggio_target: str
-    provider_llm: str = "anthropic"
-    modello_llm: str = "claude-sonnet-5"
+    provider_llm: str = ""
+    modello_llm: str = ""
     quality_gate: bool = False
 
 class InputFase3(BaseModel):
     session_id: str
     linguaggio_target: str
-    provider_llm: str = "anthropic"
-    modello_llm: str = "claude-sonnet-5"
+    provider_llm: str = ""
+    modello_llm: str = ""
     quality_gate: bool = False
 
 
@@ -860,10 +865,13 @@ def fase2_design(
     if saldo_token is not None:
         log_message(session_id, f"🪙 Credito token disponibile: {saldo_token:.2f} €.")
 
+    provider_sessione, modello_sessione = _modello_della_sessione(
+        session_id, richiesta.provider_llm, richiesta.modello_llm)
+
     _imposta_stato_esecuzione(session_id, "running", fase="fase2")
     background_tasks.add_task(
         _lavoro_fase2, session_id, user_id,
-        richiesta.provider_llm, richiesta.modello_llm,
+        provider_sessione, modello_sessione,
         richiesta.linguaggio_target, richiesta.quality_gate,
     )
     return {"status": "avviata", "session_id": session_id}
@@ -1024,10 +1032,13 @@ def fase3_implement(
     if saldo_token is not None:
         log_message(session_id, f"🪙 Credito token disponibile: {saldo_token:.2f} €.")
 
+    provider_sessione, modello_sessione = _modello_della_sessione(
+        session_id, richiesta.provider_llm, richiesta.modello_llm)
+
     _imposta_stato_esecuzione(session_id, "running", fase="fase3")
     background_tasks.add_task(
         _lavoro_fase3, session_id, user_id,
-        richiesta.provider_llm, richiesta.modello_llm,
+        provider_sessione, modello_sessione,
         richiesta.linguaggio_target, richiesta.quality_gate,
     )
     return {"status": "avviata", "session_id": session_id}
@@ -1035,6 +1046,48 @@ def fase3_implement(
 # =====================================================================
 # DOWNLOAD DINAMICO
 # =====================================================================
+
+def _modello_della_sessione(session_id, provider_richiesto, modello_richiesto):
+    """
+    Provider e modello da usare per una fase, con la scelta dell'utente
+    come unica fonte di verita'.
+
+    Se il client li invia, valgono quelli. Se non li invia — pagina ricaricata,
+    sessione ripresa da un altro dispositivo, checkpoint approvato giorni dopo —
+    si leggono dalla SESSIONE su database, dove sono stati salvati all'avvio
+    della Fase 1.
+
+    Prima esisteva un default cablato ("anthropic" / "claude-sonnet-5"): un
+    cliente che aveva scelto Google si vedeva girare le fasi 2 e 3 su Anthropic
+    e se le vedeva addebitare a quella tariffa.
+    """
+    provider = (provider_richiesto or "").strip()
+    modello = (modello_richiesto or "").strip()
+    if provider and modello:
+        return provider, modello
+
+    try:
+        r = (supabase.table("migration_sessions").select("provider_llm,modello_llm")
+             .eq("id", session_id).limit(1).execute())
+        if r.data:
+            provider = provider or (r.data[0].get("provider_llm") or "")
+            modello = modello or (r.data[0].get("modello_llm") or "")
+            if provider and modello:
+                logger.info("Sessione %s: modello recuperato dal database (%s / %s).",
+                            session_id, provider, modello)
+    except Exception as e:
+        logger.warning("Modello della sessione %s non leggibile: %s", session_id, e)
+
+    if not (provider and modello):
+        # Nessuna informazione da nessuna parte: si usa il predefinito, ma lo
+        # si dice a voce alta perche' l'addebito potrebbe non corrispondere
+        # a quanto il cliente si aspetta.
+        provider = provider or "anthropic"
+        modello = modello or MODELLO_PREDEFINITO
+        logger.warning("Sessione %s senza modello noto: uso il predefinito %s / %s.",
+                       session_id, provider, modello)
+    return provider, modello
+
 
 def _nome_file_zip(session_id, etichetta_fase):
     """
