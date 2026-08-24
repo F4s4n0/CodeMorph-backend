@@ -100,6 +100,7 @@ _applica_maschera_chiavi()
 
 logger = logging.getLogger(__name__)
 
+
 # WORKSPACE_DIR è definita in src/config.py: è l'UNICA fonte di verità,
 # condivisa con src/live_log.py così i log live vengono scritti e letti
 # dalla stessa cartella.
