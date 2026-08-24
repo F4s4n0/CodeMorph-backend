@@ -73,7 +73,40 @@ class MascheraChiaviURL(logging.Filter):
 
 # Sul logger "httpx", non sul root: i filtri NON si propagano ai logger figli,
 # quindi applicarlo altrove non avrebbe alcun effetto.
-logging.getLogger("httpx").addFilter(MascheraChiaviURL())
+def _applica_maschera_chiavi():
+    """
+    Applica il filtro a TUTTI gli handler, root compreso.
+
+    In Python i filtri su un LOGGER non vengono applicati ai record che
+    arrivano dai suoi FIGLI: httpx registra da `httpx._client`, che propaga a
+    `httpx` solo per raggiungere gli handler, saltandone i filtri. E' cosi'
+    che la chiave API di Google continuava a comparire in chiaro nei log
+    nonostante il filtro fosse installato.
+
+    Sugli HANDLER passa invece tutto cio' che viene effettivamente scritto,
+    da qualunque logger provenga.
+    """
+    maschera = MascheraChiaviURL()
+
+    def _aggiungi(destinazione):
+        if not any(isinstance(f, MascheraChiaviURL) for f in destinazione.filters):
+            destinazione.addFilter(maschera)
+
+    root = logging.getLogger()
+    _aggiungi(root)
+    for handler in root.handlers:
+        _aggiungi(handler)
+
+    # Chi installa handler propri (uvicorn) non passa dal root.
+    for nome in ("httpx", "httpx._client", "uvicorn", "uvicorn.error",
+                 "uvicorn.access", "LiteLLM", "litellm"):
+        obiettivo = logging.getLogger(nome)
+        _aggiungi(obiettivo)
+        for handler in obiettivo.handlers:
+            _aggiungi(handler)
+
+
+_applica_maschera_chiavi()
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +153,16 @@ app.include_router(affiliazione_router)
 
 #Statistiche
 app.include_router(statistiche_router)
+
+@app.on_event("startup")
+def _riapplica_maschera_chiavi():
+    """
+    Uvicorn installa i propri handler DOPO l'import del modulo: senza questa
+    seconda applicazione il filtro coprirebbe solo gli handler esistenti a
+    import-time, e una chiave API potrebbe comparire in chiaro nei log.
+    """
+    _applica_maschera_chiavi()
+
 
 @app.on_event("startup")
 def _sblocca_sessioni_orfane():
@@ -184,10 +227,9 @@ def _sblocca_sessioni_orfane():
 # =====================================================================
 
 # provider e modello NON hanno un default cablato: se il client non li invia
-# (pagina ricaricata, sessione ripresa da un altro dispositivo) si leggono
-# dalla sessione su database. Con un default fisso le fasi 2 e 3 giravano su
-# Anthropic anche quando il cliente aveva scelto Google, e se le vedeva
-# fatturare come tali.
+# (pagina ricaricata, sessione ripresa altrove) si leggono dalla sessione su
+# database. Con un default fisso le fasi 2 e 3 giravano su Anthropic anche
+# quando il cliente aveva scelto Google, e se le vedeva fatturare come tali.
 class InputFase2(BaseModel):
     session_id: str
     linguaggio_target: str
@@ -281,17 +323,26 @@ def _estrai_zip_sicuro(zip_path: Path, destinazione: Path):
         zip_ref.extractall(destinazione_abs)
 
 # File interni/ridondanti da NON includere negli zip consegnati all'utente
-FILE_ESCLUSI_DALLO_ZIP = {
-    "live_logs.txt",                   # log live: serve al terminale del frontend, non al deliverable
-    "solution_upload.zip",             # copia dello zip caricato dall'utente: ce l'ha già
-    "_implementation_checkpoint.json", # stato interno del resume della Fase 3
+# Lo ZIP fa DUE mestieri: e' il deliverable che il cliente scarica ED e' il
+# backup da cui la sessione viene ripristinata dopo un riavvio. Da qui il
+# conflitto: _file_selezionati.json non deve finire nella consegna (c'e' gia'
+# il documento leggibile), ma escluderlo lo faceva sparire dal backup e la
+# Fase 3 tornava a migrare TUTTI i file. Due liste distinte.
+
+# Mai in nessuno dei due: rumore o segreti.
+FILE_ESCLUSI_SEMPRE = {
+    "live_logs.txt",                   # log live: serve al terminale, non al deliverable
+    "solution_upload.zip",             # copia dello zip caricato: il cliente ce l'ha gia'
     "_segreti.json",                   # credenziali rilevate nei sorgenti: MAI consegnarle
-    # _file_selezionati.json NON e' piu' escluso: serve al cliente come prova
-    # di cosa ha scelto, e soprattutto deve sopravvivere a un riavvio di
-    # Render. Essendo escluso dallo zip spariva dal backup, e la Fase 3 —
-    # ripartendo da una sessione ripristinata — non lo trovava piu' e migrava
-    # TUTTI i file invece dei soli selezionati.
 }
+
+# Serve al ripristino ma non al cliente: escluso solo dalla CONSEGNA.
+FILE_SOLO_INTERNI = {
+    "_implementation_checkpoint.json", # stato del resume della Fase 3
+    "_file_selezionati.json",          # selezione: il cliente ha il .md leggibile
+}
+
+FILE_ESCLUSI_DALLO_ZIP = FILE_ESCLUSI_SEMPRE | FILE_SOLO_INTERNI
 
 def _scrivi_elenco_selezione(cartella_output, ammessi, nome_progetto=""):
     """
@@ -299,8 +350,7 @@ def _scrivi_elenco_selezione(cartella_output, ammessi, nome_progetto=""):
 
     Il cliente sceglie in una schermata e poi non ne ha piu' traccia: se un
     modulo non compare nei documenti finali, non ha modo di sapere se e' stato
-    escluso da lui o ignorato dal sistema. Qui trova l'elenco esatto, raggruppato
-    per tipo, con i totali.
+    escluso da lui o ignorato dal sistema.
     """
     per_estensione = {}
     for percorso in sorted(ammessi):
@@ -339,13 +389,48 @@ def _scrivi_elenco_selezione(cartella_output, ammessi, nome_progetto=""):
         f.write("\n".join(righe) + "\n")
 
 
-def _crea_zip_fase(percorso_base_senza_estensione, cartella_sessione, escludi_cartelle=()):
+def _zip_senza_file_interni(percorso_zip):
     """
-    Crea lo zip di consegna di una fase escludendo i file interni
-    (FILE_ESCLUSI_DALLO_ZIP) e, opzionalmente, intere cartelle
-    (es. 'sorgenti_originali' negli zip dove non serve).
+    Copia dello zip senza i file di servizio, pronta per la consegna.
+
+    L'archivio su disco e' anche il backup di ripristino e deve contenere
+    checkpoint e selezione; il cliente pero' non deve riceverli. Qui si
+    separano i due ruoli senza duplicare l'archivio a ogni fase.
+
+    Se qualcosa va storto si consegna l'originale: meglio uno ZIP con due file
+    di troppo che un download fallito.
+    """
+    try:
+        with zipfile.ZipFile(percorso_zip) as sorgente:
+            nomi = sorgente.namelist()
+            if not any(os.path.basename(n) in FILE_SOLO_INTERNI for n in nomi):
+                return percorso_zip          # niente da togliere
+
+            destinazione = str(percorso_zip).replace(".zip", "_consegna.zip")
+            with zipfile.ZipFile(destinazione, "w", zipfile.ZIP_DEFLATED) as uscita:
+                for nome in nomi:
+                    if os.path.basename(nome) in FILE_SOLO_INTERNI:
+                        continue
+                    uscita.writestr(nome, sorgente.read(nome))
+        return destinazione
+    except Exception as e:
+        logger.warning("Ripulitura dello zip %s non riuscita (%s): consegno l'originale.",
+                       percorso_zip, type(e).__name__)
+        return percorso_zip
+
+
+def _crea_zip_fase(percorso_base_senza_estensione, cartella_sessione,
+                   escludi_cartelle=(), per_backup=False):
+    """
+    Crea lo zip di una fase.
+
+    per_backup=False produce il DELIVERABLE per il cliente.
+    per_backup=True produce l'archivio di RIPRISTINO: tiene anche i file di
+    stato, senza i quali una sessione ripresa dopo un riavvio li perderebbe.
+
     Sostituisce shutil.make_archive, che non supporta esclusioni.
     """
+    esclusi = FILE_ESCLUSI_SEMPRE if per_backup else FILE_ESCLUSI_DALLO_ZIP
     percorso_zip = f"{percorso_base_senza_estensione}.zip"
     with zipfile.ZipFile(percorso_zip, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, dirs, files in os.walk(cartella_sessione):
@@ -353,7 +438,7 @@ def _crea_zip_fase(percorso_base_senza_estensione, cartella_sessione, escludi_ca
             # impedisce a os.walk di scendere dentro di esse
             dirs[:] = [d for d in dirs if d not in escludi_cartelle]
             for nome in files:
-                if nome in FILE_ESCLUSI_DALLO_ZIP:
+                if nome in esclusi:
                     continue
                 completo = os.path.join(root, nome)
                 zf.write(completo, os.path.relpath(completo, cartella_sessione))
@@ -424,7 +509,16 @@ def require_admin(user_id: str = Depends(get_current_user)):
 @app.post("/api/v1/modernize/prepara/{session_id}")
 def prepara_sorgenti(
     session_id: str,
+    background: BackgroundTasks,
     file: UploadFile = File(...),
+    # Provider e modello scelti dall'utente: la pre-selezione deve girare
+    # sul SUO modello, non su uno fisso. I default coprono i client datati
+    # che non li inviano ancora.
+    provider_llm: str = Form(""),
+    modello_llm: str = Form(""),
+    # Il nome serve gia' qui: la sessione viene registrata prima dell'analisi
+    # e senza di esso comparirebbe senza nome in "I Miei Progetti".
+    session_name: str = Form(""),
     user_id: str = Depends(get_current_user_and_validate_license),
 ):
     """
@@ -452,9 +546,45 @@ def prepara_sorgenti(
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Il file non è un archivio ZIP valido o è corrotto.")
 
+    # Backup dedicato dei sorgenti, UNA volta sola: non cambiano piu' e non
+    # devono finire negli zip di fase, che il cliente scarica.
+    #
+    # In BACKGROUND: comprimere e caricare decine di MB richiede minuti, e
+    # farlo prima di rispondere significa lasciare il cliente davanti a uno
+    # spinner per tutto il tempo. L'elenco dei file non dipende dal backup,
+    # quindi puo' partire subito; il backup serve solo a un eventuale
+    # ripristino DOPO un riavvio, che nel frattempo non e' ancora possibile.
+    background.add_task(storage.salva_sorgenti, session_id, str(cartella_output))
+
+    # La sessione va registrata ORA, non all'avvio della Fase 1: il consumo
+    # della pre-selezione viene addebitato qui, e il movimento su
+    # token_transactions fa riferimento a questa sessione. E' un upsert, e
+    # l'avvio della fase la sovrascrive con nome e impostazioni definitive.
+    try:
+        supabase.table("migration_sessions").upsert({
+            "id": session_id,
+            "user_id": user_id,
+            "session_name": session_name or "Progetto senza nome",
+            "current_step": "input",
+            "provider_llm": provider_llm or None,
+            "modello_llm": modello_llm or None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as e:
+        # Non blocca: l'analisi puo' proseguire, al massimo il movimento
+        # token non verra' collegato alla sessione.
+        logger.warning("Registrazione anticipata della sessione %s fallita: %s", session_id, e)
+
+    # La classificazione dei file e' una chiamata LLM come le altre: va
+    # contabilizzata, altrimenti su archivi grandi il costo resta a carico
+    # della piattaforma.
+    tracker = TokenUsageTracker(modello_llm)
     elenco = analizza_sorgenti(
         str(cartella_sorgenti), ESCLUDI_CARTELLE, ESTENSIONI_VALIDE, MAX_FILE_SIZE,
+        provider=provider_llm or None, modello=modello_llm or None, tracker=tracker,
     )
+    _chiudi_conteggio_token(user_id, tracker, session_id)
+
     if not elenco:
         raise HTTPException(
             status_code=400,
@@ -582,7 +712,13 @@ def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
         )
 
         log_message(session_id, "🗜️ Generazione del pacchetto ZIP del codice e dei report in corso...")
-        percorso_zip = _crea_zip_fase(str(WORKSPACE_DIR / f"{session_id}_fase1"), str(cartella_output))
+        # I sorgenti restano fuori: sono decine di MB che il cliente ha gia'
+        # caricato lui, e hanno un backup dedicato su Storage per la Fase 3.
+        percorso_zip = _crea_zip_fase(
+            str(WORKSPACE_DIR / f"{session_id}_fase1"), str(cartella_output),
+            escludi_cartelle=("sorgenti_originali",),
+            per_backup=True,   # e' anche l'archivio di ripristino
+        )
         storage.salva_zip_fase(session_id, "fase1", percorso_zip)
 
         blocco_token = _chiudi_conteggio_token(user_id, tracker, session_id)
@@ -672,8 +808,7 @@ def fase1_understand(
             logger.warning("Selezione file non salvata per %s: %s", session_id, e)
 
         # Versione leggibile per il cliente: un JSON con centinaia di percorsi
-        # e' una prova, non un documento. Cosi' puo' verificare in un colpo
-        # d'occhio che l'analisi abbia coperto quello che si aspettava.
+        # e' una prova, non un documento.
         try:
             _scrivi_elenco_selezione(cartella_output, ammessi, session_name)
         except Exception as e:
@@ -806,6 +941,7 @@ def _lavoro_fase2(session_id, user_id, provider_llm, modello_llm,
         percorso_zip = _crea_zip_fase(
             str(WORKSPACE_DIR / f"{session_id}_fase2"), str(cartella_output),
             escludi_cartelle=("sorgenti_originali",),
+            per_backup=True,   # e' anche l'archivio di ripristino
         )
         storage.salva_zip_fase(session_id, "fase2", percorso_zip)
 
@@ -968,6 +1104,7 @@ def _lavoro_fase3(session_id, user_id, provider_llm, modello_llm,
         percorso_zip = _crea_zip_fase(
             str(WORKSPACE_DIR / f"{session_id}_finale"), str(cartella_output),
             escludi_cartelle=("sorgenti_originali",),
+            per_backup=True,   # e' anche l'archivio di ripristino
         )
         storage.salva_zip_fase(session_id, "finale", percorso_zip)
 
@@ -1049,17 +1186,14 @@ def fase3_implement(
 
 def _modello_della_sessione(session_id, provider_richiesto, modello_richiesto):
     """
-    Provider e modello da usare per una fase, con la scelta dell'utente
-    come unica fonte di verita'.
+    Provider e modello per una fase, con la scelta dell'utente come unica
+    fonte di verita'.
 
-    Se il client li invia, valgono quelli. Se non li invia — pagina ricaricata,
-    sessione ripresa da un altro dispositivo, checkpoint approvato giorni dopo —
-    si leggono dalla SESSIONE su database, dove sono stati salvati all'avvio
-    della Fase 1.
-
-    Prima esisteva un default cablato ("anthropic" / "claude-sonnet-5"): un
-    cliente che aveva scelto Google si vedeva girare le fasi 2 e 3 su Anthropic
-    e se le vedeva addebitare a quella tariffa.
+    Se il client li invia valgono quelli; altrimenti si leggono dalla SESSIONE
+    su database, dove sono stati salvati all'avvio della Fase 1. Prima c'era
+    un default cablato ("anthropic" / "claude-sonnet-5"): un cliente che aveva
+    scelto Google si vedeva girare le fasi 2 e 3 su Anthropic e se le vedeva
+    addebitare a quella tariffa.
     """
     provider = (provider_richiesto or "").strip()
     modello = (modello_richiesto or "").strip()
@@ -1079,9 +1213,8 @@ def _modello_della_sessione(session_id, provider_richiesto, modello_richiesto):
         logger.warning("Modello della sessione %s non leggibile: %s", session_id, e)
 
     if not (provider and modello):
-        # Nessuna informazione da nessuna parte: si usa il predefinito, ma lo
-        # si dice a voce alta perche' l'addebito potrebbe non corrispondere
-        # a quanto il cliente si aspetta.
+        # Nessuna informazione: si usa il predefinito, ma lo si dice a voce
+        # alta perche' l'addebito potrebbe non corrispondere alle attese.
         provider = provider or "anthropic"
         modello = modello or MODELLO_PREDEFINITO
         logger.warning("Sessione %s senza modello noto: uso il predefinito %s / %s.",
@@ -1137,8 +1270,12 @@ def scarica_file(
         if not storage.scarica_zip_fase(session_id, mappa_nomi[fase], str(zip_path)):
             raise HTTPException(status_code=404, detail="File non trovato. Elabora la fase corrispondente.")
     
+    # L'archivio su disco e' quello di ripristino: per la consegna se ne
+    # prepara una copia senza i file di stato.
+    zip_consegna = _zip_senza_file_interni(zip_path)
+
     return FileResponse(
-        path=str(zip_path),
+        path=str(zip_consegna),
         media_type="application/zip",
         filename=_nome_file_zip(session_id, mappa_nomi[fase]),
     )

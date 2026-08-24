@@ -63,7 +63,63 @@ FILE_SELEZIONE = "_file_selezionati.json"
 # Codice sorgente passato agli agenti della Fase 1 insieme al grafo.
 # Senza, gli agenti documentano solo l'elenco delle dipendenze e non
 # possono citare funzioni, variabili o logica reale.
+# Tetto di RIPIEGO, usato solo se il modello non e' classificato sotto.
 MAX_CARATTERI_SORGENTI = 600_000
+
+# --- Quanto codice sorgente passare agli agenti, per fascia di modello ---
+#
+# Volutamente SEPARATO dal listino prezzi: tariffe e finestra di contesto
+# cambiano per motivi diversi (le prime quando il provider ritocca i prezzi,
+# la seconda quando esce un modello nuovo), e legarle significherebbe toccare
+# configurazione tecnica a ogni aggiornamento commerciale. C'e' anche un caso
+# che rompe la correlazione: Gemini Flash costa poco ma ha una finestra
+# enorme, e con un tetto derivato dal prezzo lo si limiterebbe senza motivo.
+#
+# Le fasce evitano di dover decidere un numero per ogni modello: si classifica
+# il modello una volta, il valore viene da qui.
+CONTESTO_PER_FASCIA = {
+    "alta":  1_500_000,   # finestre molto ampie: si passa quasi tutto
+    "media":   800_000,
+    "bassa":   300_000,   # modelli piccoli: oltre, la qualita' peggiora
+}
+
+# Modelli non elencati -> "media": prudente senza penalizzare troppo.
+FASCIA_MODELLO = {
+    # --- alta ---
+    "claude-opus-5": "alta",
+    "claude-sonnet-5": "alta",
+    "claude-fable-5": "alta",
+    "gemini-3.1-pro-preview": "alta",
+    "gemini-3.7-flash": "alta",
+    "gemini-3.6-flash": "alta",
+    "gemini-3.5-flash": "alta",
+    "gpt-5.5": "alta",
+    "gpt-5.4": "alta",
+    # --- media ---
+    "claude-haiku-4-5-20251001": "media",
+    "claude-haiku-4.5": "media",
+    "gemini-3.5-flash-lite": "media",
+    "gemini-3.1-flash-lite-preview": "media",
+    "gpt-5.4-mini": "media",
+    # --- bassa ---
+    "gpt-5.4-nano": "bassa",
+}
+
+
+def contesto_max_per_modello(nome_modello):
+    """
+    Caratteri di sorgente da passare agli agenti per un dato modello.
+
+    Un tetto unico non ha senso: su un modello con finestra ampia sacrifica
+    qualita' che il cliente ha gia' pagato, su uno piccolo provoca errori.
+    """
+    nome = (nome_modello or "").strip()
+    # LiteLLM antepone il provider ("gemini/gemini-3.6-flash"): senza toglierlo
+    # nessun modello verrebbe riconosciuto e cadrebbero tutti in fascia media.
+    if "/" in nome:
+        nome = nome.rsplit("/", 1)[-1]
+    fascia = FASCIA_MODELLO.get(nome, "media")
+    return CONTESTO_PER_FASCIA.get(fascia, MAX_CARATTERI_SORGENTI)
 
 # File generati automaticamente o senza logica di business: esclusi PRIMA
 # di arrivare al modello, quindi a costo zero. (pattern, motivo mostrato)

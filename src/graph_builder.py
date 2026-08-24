@@ -56,7 +56,7 @@ _abilita_memo_foxpro()
 # lettura dei log live). L'import resta qui anche come re-export per il
 # codice esistente che lo importava da questo modulo.
 import interruzione
-from src.config import DELAY_TRA_FILE_SEC, MAX_CARATTERI_SORGENTI
+from src.config import DELAY_TRA_FILE_SEC, MAX_CARATTERI_SORGENTI, contesto_max_per_modello
 from src.live_log import log_message
 
 logger = logging.getLogger(__name__)
@@ -462,7 +462,7 @@ def raccogli_sorgenti(cartella_sorgente, max_caratteri=None, file_ammessi=None):
 
     return "".join(parti)
 
-def _componi_contesto(G, sorgenti, session_id=None):
+def _componi_contesto(G, sorgenti, session_id=None, modello=None):
     """
     Contesto per gli agenti della Fase 1: il grafo delle relazioni PIÙ il
     codice sorgente reale.
@@ -478,20 +478,45 @@ def _componi_contesto(G, sorgenti, session_id=None):
     parti.append("grafo qui sopra, fa fede il codice.")
     parti.append("=" * 70 + "\n")
 
-    usati = 0
+    # Il tetto dipende dal modello scelto: su una finestra ampia troncare a
+    # 600k sacrificherebbe qualita' che il cliente ha gia' pagato.
+    massimo = contesto_max_per_modello(modello)
+
+    usati, inclusi = 0, 0
     for nome, contenuto in sorgenti:
         blocco = f"\n----- FILE: {nome} -----\n{contenuto}\n"
-        if usati + len(blocco) > MAX_CARATTERI_SORGENTI:
+        if usati + len(blocco) > massimo:
             parti.append(
-                f"\n[...{len(sorgenti)} file totali: il contesto è stato troncato "
-                "per limiti di dimensione. I file non inclusi restano nel grafo...]"
+                f"\n[...ATTENZIONE: di {len(sorgenti)} file ne sono inclusi {inclusi}. "
+                "Il contesto e' stato troncato per limiti di dimensione: i file non "
+                "inclusi compaiono nel grafo ma il loro codice NON e' disponibile. "
+                "Dichiaralo esplicitamente nel documento invece di descriverli come "
+                "se li avessi letti...]"
             )
             break
         parti.append(blocco)
         usati += len(blocco)
+        inclusi += 1
 
     if session_id:
-        log_message(session_id, f"Contesto per gli agenti: grafo + {usati // 1000} KB di codice sorgente.")
+        if inclusi < len(sorgenti):
+            # Va detto FORTE: un troncamento silenzioso fa credere che
+            # l'analisi copra tutto il sistema quando ne copre una parte.
+            log_message(
+                session_id,
+                f"⚠️ Contesto troncato: solo {inclusi} file su {len(sorgenti)} "
+                f"({usati // 1000} KB su un tetto di {massimo // 1000} KB). "
+                "I documenti copriranno solo questa porzione: valuta un modello "
+                "con finestra piu' ampia o una selezione file piu' stretta.",
+            )
+            logger.warning("Contesto troncato per %s: %d file su %d (%d KB / %d KB).",
+                           session_id, inclusi, len(sorgenti), usati // 1000, massimo // 1000)
+        else:
+            log_message(
+                session_id,
+                f"Contesto per gli agenti: grafo + {usati // 1000} KB di codice "
+                f"sorgente ({inclusi} file, tutti inclusi).",
+            )
     return "\n".join(parti)
 
 def _genera_report_grafo(G):
@@ -556,4 +581,7 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None,
                 log_message(session_id, f"Errore IA su {file}: {e}")
 
     log_message(session_id, "Calcolo delle dipendenze strutturali completato. Generazione report...")
-    return _componi_contesto(G, sorgenti, session_id)
+    # Il nome del modello si ricava dall'oggetto LLM gia' in mano: evita di
+    # propagare un parametro in piu' lungo tutta la catena di chiamate.
+    nome_modello = getattr(llm, "model", None) or getattr(llm, "model_name", None)
+    return _componi_contesto(G, sorgenti, session_id, modello=nome_modello)
