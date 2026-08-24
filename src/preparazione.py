@@ -255,7 +255,13 @@ def analizza_sorgenti(cartella_sorgenti, escludi_cartelle, estensioni_valide, ma
             # --- Troppo grande --------------------------------------------
             # Anche questo spariva senza dire nulla, e su un file di logica
             # importante il cliente non poteva nemmeno saperlo.
-            if dimensione > max_file_size:
+            #
+            # Il limite vale solo per cio' che viene letto COME TESTO: di una
+            # tabella non leggiamo i dati ma lo SCHEMA, che occupa poche righe
+            # sia che il file pesi 1 KB o 50 MB. Escludere hlog.dbf perche'
+            # "troppo grande" significava perdere la struttura di una tabella
+            # centrale per un motivo che non la riguarda.
+            if dimensione > max_file_size and estensione not in ESTENSIONI_CON_ESTRATTORE:
                 candidati.append({
                     "file": relativo,
                     "dimensione": dimensione,
