@@ -635,6 +635,70 @@ def _read_if_exists(path, fallback):
 # FASE 1 - UNDERSTANDING
 # =====================================================================
 
+def _verifica_copertura_inventario(output_dir, codice_legacy, session_id):
+    """
+    Controlla che OGNI file dato in pasto agli agenti compaia nei documenti,
+    e aggiunge in coda all'inventario quelli mancanti.
+
+    Un'istruzione nel prompt non basta: il modello puo' credere di aver citato
+    tutto e saltarne qualcuno senza accorgersene. Qui il controllo e'
+    deterministico — si confrontano i nomi presenti nel contesto con quelli
+    presenti nei documenti — e il risultato e' visibile al cliente invece di
+    restare un dato interno.
+
+    Non riscrive il documento: aggiunge una sezione finale con l'elenco dei
+    non citati. Meglio una nota onesta in fondo che un documento che sembra
+    completo e non lo e'.
+    """
+    ricevuti = {n.strip() for n in re.findall(r"----- FILE: (.+?) -----", codice_legacy or "")}
+    if not ricevuti:
+        return
+
+    nomi_brevi = {p.rsplit("/", 1)[-1].lower(): p for p in ricevuti}
+
+    testo_documenti = ""
+    for nome in (FILE_ASSESSMENT, FILE_DEPENDENCY_MAP, FILE_TECH_DOC,
+                 FILE_FUNCTIONAL_DOC, FILE_TEST_BOOK):
+        testo_documenti += _read_if_exists(f"{output_dir}/{nome}", "").lower()
+    if not testo_documenti:
+        return
+
+    mancanti = sorted(percorso for breve, percorso in nomi_brevi.items()
+                      if breve not in testo_documenti)
+    if not mancanti:
+        log_message(session_id, f"✅ Copertura inventario completa: tutti i {len(ricevuti)} file sono citati nei documenti.")
+        return
+
+    log_message(
+        session_id,
+        f"⚠️ {len(mancanti)} file su {len(ricevuti)} non risultano citati nei documenti: "
+        "vengono elencati in coda all'inventario.",
+    )
+    logger.warning("Inventario incompleto: %d file non citati (%s).",
+                   len(mancanti), ", ".join(mancanti[:10]))
+
+    percorso = f"{output_dir}/{FILE_ASSESSMENT}"
+    testo = _read_if_exists(percorso, "")
+    if not testo:
+        return
+    coda = [
+        "",
+        "---",
+        "",
+        "## File analizzati ma non trattati nel dettaglio",
+        "",
+        f"I seguenti {len(mancanti)} file fanno parte dell'analisi ma non sono stati",
+        "descritti singolarmente nelle sezioni precedenti. Sono elencati qui per",
+        "completezza: se uno di essi e' rilevante per il tuo sistema, segnalalo",
+        "prima di procedere alla fase successiva.",
+        "",
+    ]
+    coda += [f"- `{p}`" for p in mancanti]
+    coda.append("")
+    with open(percorso, "w", encoding="utf-8") as f:
+        f.write(testo.rstrip() + "\n" + "\n".join(coda))
+
+
 def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tracker=None, quality_gate=False):
     """
     Esegue la FASE 1: Understanding.
@@ -696,6 +760,12 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
     annuncia_avvio()
     risultato = crew.kickoff(inputs={"codice_legacy": codice_legacy})
     _salva_output_su_disco(tasks, output_dir, _nome_progetto(session_id))
+    # Verifica deterministica: un'istruzione nel prompt non garantisce che gli
+    # agenti abbiano davvero citato tutto.
+    try:
+        _verifica_copertura_inventario(output_dir, codice_legacy, session_id)
+    except Exception as e:
+        logger.warning("Verifica copertura inventario non riuscita: %s", e)
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
         _salva_consumo_parziale(session_id, tracker)

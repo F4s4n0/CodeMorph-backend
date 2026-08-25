@@ -132,7 +132,16 @@ def get_understanding_tasks(agents, output_dir, numero_file=0):
             "Se il documento risultasse fatto quasi solo di tabelle, hai "
             "prodotto un elenco, non un assessment: il cliente non paga per "
             "sapere quali file possiede, ma per sapere COSA fanno e cosa "
-            "comportano."
+            "comportano.\n\n"
+            "CONTROLLO FINALE PRIMA DI CONSEGNARE: riprendi l'elenco dei file "
+            "che hai ricevuto e verifica UNO A UNO che ciascuno compaia nel "
+            "documento. Il conteggio del prospetto quantitativo deve "
+            "corrispondere ai file effettivamente elencati nelle tabelle. "
+            "Se ne trovi di non citati, aggiungili: anche un file che ti "
+            "sembra minore o ripetitivo va nominato, perche' il cliente "
+            "controlla proprio quelli per capire se l'analisi e' stata "
+            "davvero completa. Se un file non e' analizzabile, dillo "
+            "esplicitamente con il motivo invece di ometterlo."
              + CONVENZIONI_FASE1
         )+ _nota_data(),
         expected_output=(
