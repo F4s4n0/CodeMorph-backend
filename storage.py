@@ -37,6 +37,11 @@ FASI_IN_ORDINE = ("fase1", "fase2", "finale")
 # riavvio di Render, ma NON va consegnata: il cliente ce l'ha gia'.
 NOME_SORGENTI = "sorgenti_originali"
 
+# File del lavoro parziale della Fase 3: piccoli, si salvano di continuo.
+FILE_CHECKPOINT = "_implementation_checkpoint.json"
+FILE_BACKEND = "6a_Backend_Project_Implementation.md"
+FILE_FRONTEND = "6b_Frontend_Project_Implementation.md"
+
 
 def _percorso_remoto(session_id, fase):
     return f"{session_id}/{fase}.zip"
@@ -91,6 +96,80 @@ def _estrai_sicuro(percorso_zip, destinazione):
             if not finale.startswith(destinazione_abs + os.sep) and finale != destinazione_abs:
                 raise ValueError(f"Percorso non sicuro nello zip di backup: {membro.filename}")
         zf.extractall(destinazione_abs)
+
+
+def _percorso_remoto_progresso(session_id):
+    return f"{session_id}/progresso_fase3.zip"
+
+
+def salva_progresso_fase3(session_id, cartella_sessione):
+    """
+    Salva su Storage il lavoro svolto FINORA dalla Fase 3, senza attendere
+    che la fase finisca.
+
+    Il backup di fase avviene solo al termine: su un applicativo da 200 file
+    la Fase 3 dura ore, e un riavvio di Render a due terzi del lavoro azzerava
+    tutto — checkpoint compreso, perche' viveva solo sul file system effimero.
+    Il cliente si ritrovava una sessione "completata" con un file migrato e
+    il credito token consumato.
+
+    Si caricano solo tre file piccoli (checkpoint + i due documenti di
+    implementazione): poche decine di KB, quindi si puo' fare dopo OGNI file
+    migrato senza che l'utente se ne accorga.
+    """
+    da_salvare = [FILE_CHECKPOINT, FILE_BACKEND, FILE_FRONTEND]
+    presenti = [n for n in da_salvare
+                if os.path.isfile(os.path.join(cartella_sessione, n))]
+    if not presenti:
+        return False
+
+    temporaneo = os.path.join(cartella_sessione, "_progresso_backup.zip")
+    try:
+        with zipfile.ZipFile(temporaneo, "w", zipfile.ZIP_DEFLATED) as zf:
+            for nome in presenti:
+                zf.write(os.path.join(cartella_sessione, nome), nome)
+        with open(temporaneo, "rb") as f:
+            contenuto = f.read()
+        supabase.storage.from_(BUCKET_SESSIONI).upload(
+            path=_percorso_remoto_progresso(session_id),
+            file=contenuto,
+            file_options={"content-type": "application/zip", "upsert": "true"},
+        )
+        return True
+    except Exception as e:
+        # Best-effort: se il salvataggio fallisce la migrazione prosegue,
+        # si perde solo la possibilita' di riprendere da quel punto.
+        logger.warning("Progresso Fase 3 non salvato per %s: %s", session_id, e)
+        return False
+    finally:
+        try:
+            os.remove(temporaneo)
+        except OSError:
+            pass
+
+
+def ripristina_progresso_fase3(session_id, cartella_sessione):
+    """Riporta su disco il lavoro parziale della Fase 3. True se riuscito."""
+    temporaneo = os.path.join(cartella_sessione, "_restore_progresso.zip")
+    try:
+        contenuto = supabase.storage.from_(BUCKET_SESSIONI).download(
+            _percorso_remoto_progresso(session_id)
+        )
+        if not contenuto:
+            return False
+        os.makedirs(cartella_sessione, exist_ok=True)
+        with open(temporaneo, "wb") as f:
+            f.write(contenuto)
+        _estrai_sicuro(temporaneo, cartella_sessione)
+        logger.info("Sessione %s: progresso Fase 3 ripristinato da Storage.", session_id)
+        return True
+    except Exception:
+        return False          # nessun lavoro parziale da recuperare
+    finally:
+        try:
+            os.remove(temporaneo)
+        except OSError:
+            pass
 
 
 def _percorso_remoto_sorgenti(session_id):
@@ -241,6 +320,12 @@ def ripristina_sessione(session_id, cartella_sessione):
             except OSError:
                 pass
 
+    # Il lavoro parziale della Fase 3 va sovrapposto PER ULTIMO: e' piu'
+    # recente dello zip di fase e contiene i file migrati dopo l'ultimo
+    # completamento.
+    if ripristina_progresso_fase3(session_id, cartella_sessione):
+        ripristinate.append("progresso_fase3")
+
     if not ripristinate:
         logger.info("Nessun backup su Storage per la sessione %s.", session_id)
     return ripristinate
@@ -251,6 +336,7 @@ def elimina_backup_sessione(session_id):
     try:
         percorsi = [_percorso_remoto(session_id, fase) for fase in FASI_IN_ORDINE]
         percorsi.append(_percorso_remoto_sorgenti(session_id))
+        percorsi.append(_percorso_remoto_progresso(session_id))
         supabase.storage.from_(BUCKET_SESSIONI).remove(percorsi)
         logger.info("Backup su Storage rimossi per la sessione %s.", session_id)
         return True

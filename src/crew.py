@@ -1108,6 +1108,18 @@ def run_implementation_phase(
             # Checkpoint SOLO dopo la scrittura riuscita su entrambi i file
             processati.add(nome_file)
             _save_checkpoint(percorso_checkpoint, processati)
+
+            # Il checkpoint su disco non basta: il file system di Render e'
+            # effimero e il backup di fase avviene solo alla FINE. Su 200 file
+            # un riavvio a meta' azzerava ore di lavoro e il credito consumato.
+            # Qui si salvano su Storage checkpoint e documenti (poche decine di
+            # KB) dopo OGNI file: un'interruzione costa un file, non duecento.
+            try:
+                import storage
+                storage.salva_progresso_fase3(session_id, output_dir)
+            except Exception as e:
+                logger.warning("Progresso Fase 3 non salvato su Storage: %s", e)
+
             # Tipi e progetti appena prodotti diventano contesto per i file
             # successivi: e' cosi' che il primo file guida tutti gli altri.
             tipi_generati |= _tipi_dichiarati(output_backend)
