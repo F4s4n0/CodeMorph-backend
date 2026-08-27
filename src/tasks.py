@@ -282,13 +282,38 @@ def get_understanding_tasks(agents, output_dir, numero_file=0):
 # FASE 2 - DESIGN
 # =====================================================================
 
-def get_design_tasks(agents, output_dir, contesto_fase1=""):
+def get_design_tasks(agents, output_dir, contesto_fase1="", numero_file=0):
     """
     Ritorna i task per la FASE 2: Design (Universale).
     Prende in input i report validati della fase 1 e produce il piano architetturale.
     Si ferma per il CHECK POINT 2.
     """
     
+    # Stesso criterio della Fase 1: l'ampiezza si misura sulla COPERTURA delle
+    # decisioni da prendere, non su un numero di sezioni deciso a priori. Con
+    # il tetto fisso a 8, il piano di migrazione di un sistema da centinaia di
+    # file usciva lungo quanto quello di un applicativo da quattro.
+    vincolo_ampiezza = (
+        "AMPIEZZA DEL DOCUMENTO — si misura sulle DECISIONI, non sul numero di "
+        "pagine: ogni area funzionale del sistema legacy deve trovare una "
+        "risposta architetturale esplicita (dove finisce, come si traduce, con "
+        "quale tecnologia, con quali rischi). Un'area del sistema che non "
+        "compare nel piano e' un pezzo di migrazione che nessuno ha progettato. "
+        "Su un sistema piccolo verranno poche decisioni approfondite; su uno "
+        "con centinaia di file ne serviranno molte di piu': e' il sistema a "
+        "dettare la lunghezza. "
+        "NON diluire per allungare: gli ADR devono nascere da vincoli REALI "
+        "trovati nel codice, non da prassi generiche di settore. "
+        "COMPLETEZZA: non annunciare nell'indice sezioni che non svilupperai, "
+        "non inserire rinvii a sezioni inesistenti, e concludi il testo prima "
+        "di esaurire lo spazio disponibile."
+    )
+    if numero_file:
+        vincolo_ampiezza = (
+            f"Il sistema legacy analizzato comprende {numero_file} file: il piano "
+            "deve reggere una migrazione di questa portata. " + vincolo_ampiezza
+        )
+
     # 🛡️ PROTEZIONE: Disinnesca le graffe generate in Fase 1
     safe_contesto = _escape_braces(contesto_fase1)
 
@@ -336,12 +361,7 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "questo sistema legacy: come si traduce ogni componente esistente, "
             "quali decisioni architetturali richiede il codice che hai letto, "
             "quali rischi di migrazione presenta. "
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO e autoconclusivo: non annunciare nell'indice "
-            "sezioni che non svilupperai, non inserire rinvii a sezioni "
-            "inesistenti, e concludi il testo prima di esaurire lo spazio. "
-            "Meglio 5 sezioni piene di contenuto specifico che 8 riempite di "
-            "prassi generiche. "
+            + vincolo_ampiezza + " "
             "OBBLIGATORIO: il documento deve contenere la sezione "
             "'### STRUTTURA SOLUTION' nel formato indicato, con l'elenco puntato "
             "dei progetti. E' la parte che il cliente approva e che guida la "
@@ -399,11 +419,14 @@ def get_design_tasks(agents, output_dir, contesto_fase1=""):
             "OBBLIGATORIA: senza, il cliente non ha modo di sapere che fine ha "
             "fatto ciascuna delle sue tabelle, e la migrazione dei dati diventa "
             "un lavoro di ricostruzione a posteriori."
-            "VINCOLO DI COMPLETEZZA: massimo 8 sezioni principali. Il documento "
-            "deve essere COMPLETO: non annunciare nell'indice sezioni che non "
-            "svilupperai, e concludi il testo prima di esaurire lo spazio "
-            "disponibile. Meglio 6 sezioni complete che 13 dichiarate e troncate. "
-            "Non inserire rinvii a sezioni che non esistono nel documento."
+            "AMPIEZZA: qui la misura non sono le sezioni ma le TABELLE. Ogni "
+            "struttura dati del sistema legacy deve comparire nello schema, "
+            "come tabella migrata oppure nella mappa come esclusa con il suo "
+            "motivo. Una tabella che sparisce senza spiegazione sono dati che "
+            "il cliente scoprira' mancanti solo a migrazione avvenuta. "
+            "COMPLETEZZA: non annunciare sezioni che non svilupperai, non "
+            "inserire rinvii a sezioni inesistenti, e concludi il testo prima "
+            "di esaurire lo spazio disponibile."
         ),
         agent=agents["database_administrator"],
         context=[migration_plan_task],

@@ -829,7 +829,12 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
     _salva_segreti_sessione(output_dir)
 
     agents = create_agents(llm)
-    tasks = get_design_tasks(agents, output_dir, contesto_fase1=contesto_fase1)
+    # Il numero di file regola l'ampiezza attesa del piano: un sistema da
+    # centinaia di file richiede piu' decisioni architetturali di uno da
+    # quattro, e con un tetto fisso i due documenti uscivano lunghi uguale.
+    numero_file = contesto_sorgenti.count("----- FILE:")
+    tasks = get_design_tasks(agents, output_dir, contesto_fase1=contesto_fase1,
+                             numero_file=numero_file)
     annuncia_avvio, task_callback = crea_logger_attivita(
         session_id, tasks, etichetta="Fase 2 · Design"
     )
