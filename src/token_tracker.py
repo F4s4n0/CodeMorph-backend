@@ -62,6 +62,9 @@ class TokenUsageTracker:
         self.completion_tokens = 0
         self.richieste = 0
         self._totale_dichiarato = 0
+        # Ultima lettura CUMULATIVA vista da aggiungi_crew(). Serve a sommare
+        # solo l'incremento: vedi la spiegazione in aggiungi_crew().
+        self._ultima_lettura = {}
 
     def aggiungi_metriche(self, metriche):
         if not metriche:
@@ -72,15 +75,68 @@ class TokenUsageTracker:
         self.richieste += _leggi_metrica(metriche, "successful_requests")
 
     def aggiungi_crew(self, crew, risultato=None):
+        """
+        Contabilizza il consumo di una crew appena eseguita.
+
+        ATTENZIONE — le metriche di CrewAI sono CUMULATIVE, non per singola
+        esecuzione: gli agenti accumulano il consumo al proprio interno e
+        `crew.usage_metrics` somma quegli accumulatori. In Fase 3 gli agenti
+        vengono creati UNA volta sola e riusati per ogni file, quindi ogni
+        lettura contiene gia' tutto il consumo dei file precedenti.
+
+        Sommare il valore assoluto a ogni file faceva crescere il conteggio in
+        modo QUADRATICO: su 211 file il totale risultava ~106 volte quello
+        reale, e un cliente si e' visto addebitare 6.417 EUR per un consumo di
+        47 EUR.
+
+        Qui si somma solo l'INCREMENTO rispetto all'ultima lettura. Se le
+        metriche non fossero cumulative (crew con agenti nuovi ogni volta) il
+        valore scenderebbe invece di salire: in quel caso si riparte da zero e
+        si somma il valore pieno, che e' il comportamento corretto per quel
+        caso.
+        """
         da_risultato = getattr(risultato, "token_usage", None)
         da_crew = getattr(crew, "usage_metrics", None)
-        logger.debug(
-            "METRICHE | da_risultato=%s | da_crew=%s | accumulato_prima=(p=%d c=%d t=%d)",
-            da_risultato, da_crew,
-            self.prompt_tokens, self.completion_tokens, self._totale_dichiarato,
-        )
         metriche = da_risultato or da_crew
-        self.aggiungi_metriche(metriche)
+        if not metriche:
+            return
+
+        # Si decide UNA volta, alla seconda lettura, se questa sorgente e'
+        # cumulativa. Farlo per singola metrica sarebbe fragile: un contatore
+        # costante (due chiamate a file, sempre) verrebbe scambiato per
+        # "nessun incremento" e il consumo sparirebbe dal conteggio.
+        totale_letto = _leggi_metrica(metriche, "total_tokens") or (
+            _leggi_metrica(metriche, "prompt_tokens")
+            + _leggi_metrica(metriche, "completion_tokens")
+        )
+        # NOTA IMPORTANTE — le metriche di CrewAI sono CUMULATIVE per AGENTE:
+        # ogni agente accumula il consumo al proprio interno e usage_metrics
+        # somma quegli accumulatori. Riusando gli stessi agenti per piu' file,
+        # ogni lettura conterrebbe gia' tutto il consumo precedente e sommarla
+        # farebbe crescere il totale in modo QUADRATICO: su 211 file un cliente
+        # si e' visto addebitare 6.417 EUR per un consumo reale di 47.
+        #
+        # La correzione e' in crew.py, che ora crea agenti NUOVI per ogni file:
+        # i contatori ripartono da zero e ogni lettura vale per se'. Qui resta
+        # un presidio: si segnala se una lettura appare cumulativa, cioe' se
+        # supera il totale gia' contabilizzato quando ci sono gia' state
+        # letture precedenti.
+        if self._ultima_lettura and totale_letto >= max(1, self.tokens_totali):
+            logger.warning(
+                "Metriche possibilmente CUMULATIVE (lettura=%d, gia' contato=%d): "
+                "se gli agenti vengono riusati il consumo risultera' sovrastimato.",
+                totale_letto, self.tokens_totali,
+            )
+        self._ultima_lettura["_totale"] = totale_letto
+
+        incremento = {n: _leggi_metrica(metriche, n) for n in
+                      ("prompt_tokens", "completion_tokens", "total_tokens",
+                       "successful_requests")}
+
+        logger.debug("METRICHE | lette=%s | incremento=%s | accumulato=(p=%d c=%d t=%d)",
+                     metriche, incremento,
+                     self.prompt_tokens, self.completion_tokens, self._totale_dichiarato)
+        self.aggiungi_metriche(incremento)
 
     @property
     def tokens_totali(self):

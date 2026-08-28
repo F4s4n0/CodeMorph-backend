@@ -1004,8 +1004,18 @@ def run_implementation_phase(
             else:
                 funzionale, test = contesto_funzionale, contesto_test
 
+            # Agenti NUOVI per ogni file: in CrewAI ogni agente accumula il
+            # proprio consumo token al suo interno, e crew.usage_metrics somma
+            # quegli accumulatori. Riusando gli stessi oggetti per 211 file,
+            # ogni lettura conteneva il totale dall'inizio della fase e il
+            # conteggio cresceva in modo QUADRATICO: un cliente si e' visto
+            # addebitare 6.417 EUR per un consumo reale di 47.
+            # Crearli qui costa pochi millisecondi e azzera i contatori a ogni
+            # file, rendendo la misura corretta alla fonte.
+            agents_file = create_agents(llm)
+
             tasks_file = get_iterative_implementation_tasks(
-                agents=agents,
+                agents=agents_file,
                 linguaggio_target=linguaggio_target,
                 nome_file_legacy=nome_file,
                 contenuto_file_legacy=file_info["codice"],
@@ -1025,7 +1035,8 @@ def run_implementation_phase(
                 interruzione.verifica_stop(session_id)   # solleva se richiesto
 
             crew_file = Crew(
-                agents=[agents["senior_migration_developer"], agents["frontend_developer"]],
+                agents=[agents_file["senior_migration_developer"],
+                        agents_file["frontend_developer"]],
                 tasks=tasks_file.as_list(),
                 process=Process.sequential,
                 verbose=False,  # Silenzioso per non inondare la console

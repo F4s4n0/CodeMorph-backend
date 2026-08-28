@@ -1382,7 +1382,6 @@ def admin_cancella_sessione(session_id: str, user_id: str = Depends(get_current_
         if cartella_sessione.exists() and cartella_sessione.is_dir():
             shutil.rmtree(cartella_sessione)
             logger.info("Cartella fisica eliminata: %s", cartella_sessione)
-            storage.elimina_backup_sessione(session_id)
         for suffisso in ["_fase1.zip", "_fase2.zip", "_finale.zip"]:
             zip_path = WORKSPACE_DIR / f"{session_id}{suffisso}"
             if zip_path.exists():
@@ -1390,6 +1389,16 @@ def admin_cancella_sessione(session_id: str, user_id: str = Depends(get_current_
                 logger.info("Archivio ZIP rimosso: %s", zip_path)
     except Exception as e:
         logger.warning("Errore parziale rimozione file di %s: %s", session_id, e)
+
+    # Il backup su Storage va rimosso SEMPRE, non solo quando esiste ancora la
+    # cartella locale: dopo un riavvio di Render quella cartella non c'e' piu',
+    # e con il controllo annidato i sorgenti del cliente restavano sul bucket a
+    # tempo indefinito. E' un problema di spazio ma soprattutto di privacy: chi
+    # cancella un progetto si aspetta che il proprio codice sparisca davvero.
+    try:
+        storage.elimina_backup_sessione(session_id)
+    except Exception as e:
+        logger.warning("Backup su Storage non rimosso per %s: %s", session_id, e)
 
     # 3. Cancellazione record su Supabase
     try:
