@@ -78,6 +78,14 @@ def get_understanding_tasks(agents, output_dir, numero_file=0):
         "Su un sistema piccolo verranno poche sezioni molto approfondite; su un "
         "sistema con centinaia di file ne serviranno molte di piu': in entrambi "
         "i casi e' il sistema a dettare la lunghezza, non un limite prefissato. "
+        "REGOLE DI BUSINESS — e' qui che si gioca tutto: quando incontri un "
+        "calcolo, una validazione o una condizione che decide un esito, non "
+        "limitarti a dire che esiste. SCRIVI LA REGOLA: quali valori entrano, "
+        "come vengono combinati, quali soglie e casi particolari, cosa succede "
+        "nei casi limite. Chi riscrivera' il sistema partira' da questo "
+        "documento e non avra' il codice originale sotto gli occhi: una regola "
+        "citata ma non spiegata e' logica che andra' persa nella migrazione. "
+        "Riporta i nomi reali di funzioni, campi e tabelle coinvolte.\n"
         "NON COMPRIMERE per brevita': hai a disposizione molto spazio e devi "
         "usarlo. Su un sistema di centinaia di file un documento di quattro "
         "pagine e' inadeguato a prescindere da quanto sia denso: significa che "
@@ -128,6 +136,16 @@ def get_understanding_tasks(agents, output_dir, numero_file=0):
             "un elenco puntato discorsivo non permette al cliente di verificare "
             "che il SUO file sia stato analizzato. Se una tipologia ha decine di "
             "file, raggruppa per area funzionale ma NON omettere righe.\n\n"
+            "STRUTTURE DATI NON PRESENTI NELL'ARCHIVIO: alcune tabelle citate dal "
+            "codice non esistono come file, perche' risiedono su un database "
+            "esterno o sono create a runtime. Dichiaralo esplicitamente e indica "
+            "DA DOVE risulta la loro esistenza (la query che le interroga, la "
+            "connessione che le raggiunge). NON ricostruire la struttura per "
+            "deduzione dalle query: uno schema dedotto sembra autorevole ma puo' "
+            "essere sbagliato nei tipi, nelle chiavi e nei vincoli, e chi "
+            "progetta il nuovo modello dati non ha modo di accorgersene. Meglio "
+            "una lacuna dichiarata che un tracciato inventato: segnala al "
+            "cliente che serve lo script dello schema del database.\n\n"
             "MA LE TABELLE NON SONO IL DOCUMENTO: sono il suo apparato. Ogni "
             "sezione dell'inventario si APRE con l'analisi in prosa di quel "
             "gruppo di file — a cosa serve nell'applicativo, come i file "
@@ -533,13 +551,47 @@ def get_iterative_implementation_tasks(
 """
 
     if tipi_gia_generati:
-        elenco = ", ".join(sorted(tipi_gia_generati)[:150])
+        # I tipi si raggruppano per CATEGORIA, non si troncano in ordine
+        # alfabetico. Con `sorted(...)[:150]` su un progetto da centinaia di
+        # file l'agente riceveva solo i tipi da A a E: tutto il resto non gli
+        # veniva mai comunicato e finiva per reinventarlo con un nome nuovo —
+        # da qui `IApplicationDbContext`, `IAppDbContext` e `ApplicationDbContext`
+        # convissuti nello stesso progetto.
+        #
+        # Le INTERFACCE e i CONTESTI hanno la precedenza: sono i tipi condivisi
+        # che, duplicati, spezzano la dependency injection. I DTO contano meno,
+        # e quando sono troppi si dichiara solo quanti sono.
+        interfacce = sorted(t for t in tipi_gia_generati if t.startswith("I") and t[1:2].isupper())
+        contesti = sorted(t for t in tipi_gia_generati
+                          if ("Context" in t or "Repository" in t or "Service" in t)
+                          and t not in interfacce)
+        altri = sorted(t for t in tipi_gia_generati
+                       if t not in interfacce and t not in contesti)
+
+        parti = []
+        if interfacce:
+            parti.append("INTERFACCE (usa ESATTAMENTE questi nomi):\n        "
+                         + ", ".join(interfacce[:200]))
+        if contesti:
+            parti.append("SERVIZI, REPOSITORY E CONTESTI:\n        "
+                         + ", ".join(contesti[:200]))
+        if altri:
+            mostrati = altri[:150]
+            coda = (f" ... e altri {len(altri) - len(mostrati)} tipi gia' definiti: "
+                    "prima di crearne uno nuovo verifica che non esista gia' "
+                    "con un nome equivalente") if len(altri) > len(mostrati) else ""
+            parti.append("ALTRI TIPI (DTO, entita', enum):\n        "
+                         + ", ".join(mostrati) + coda)
+
         blocco_tipi_esistenti = f"""
         TIPI GIÀ GENERATI NEI FILE PRECEDENTI (NON RIDEFINIRLI):
-        {_escape_braces(elenco)}
+        {_escape_braces(chr(10) + "        ".join(parti))}
         Se ti serve uno di questi, RIUSALO importandolo con lo stesso nome e lo
         stesso namespace. Non crearne una variante, non cambiarne il nome, non
         duplicarne il file: sono già presenti nel progetto.
+        Attenzione ai SINONIMI: se esiste `IApplicationDbContext` non creare
+        `IAppDbContext` o `IDbContext`; se esiste `EmployeeDto` non creare
+        `DipendenteDto`. Due nomi per la stessa cosa spezzano la compilazione.
 """
     else:
         blocco_tipi_esistenti = ""

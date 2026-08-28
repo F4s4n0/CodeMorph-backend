@@ -322,6 +322,13 @@ SOGLIA_MASSIMA_PAYPAL_EUR = Decimal("14950.00")
 # gli agenti stanno duplicando codice, non che il progetto e' grande.
 QA_MAX_CHUNK_ATTESI = 5
 
+# Tetto DURO alle parti analizzate dal Quality Check. Su un progetto reale il
+# codice generato ha prodotto 80 blocchi: 80 chiamate LLM per un report che
+# nessuno legge per intero, con una frammentazione tale da rendere le
+# segnalazioni inaffidabili. Oltre questa soglia si analizza una porzione
+# rappresentativa e si DICHIARA nel report cosa e' rimasto fuori.
+QA_MAX_PARTI = 12
+
 # Numero massimo di PROGETTI attesi nella solution generata.
 # La Fase 3 migra un file legacy per volta e ogni passata tende a inventare
 # la propria architettura: su un applicativo da 129 file sono nati decine di

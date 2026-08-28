@@ -25,6 +25,7 @@ from src.config import (
     FILE_TEST_BOOK,
     QA_CHUNK_MAX_CHARS,
     QA_MAX_CHUNK_ATTESI,
+    QA_MAX_PARTI,
     MAX_PROGETTI_ATTESI,
     FILE_VALIDATION_FASE1,
     FILE_VALIDATION_FASE2,
@@ -1198,8 +1199,25 @@ def run_implementation_phase(
     )
 
     chunks = _chunk_text(codice_completo, QA_CHUNK_MAX_CHARS)
+
+    # Tetto alle parti analizzate. Su un progetto reale il codice generato ha
+    # richiesto 80 blocchi: 80 chiamate LLM per un report che nessuno legge per
+    # intero, e con una frammentazione tale che il revisore non vede piu' le
+    # interazioni fra le parti. Meglio analizzare a fondo una porzione
+    # rappresentativa e DICHIARARE cosa e' rimasto fuori, che produrre ottanta
+    # verdetti parziali pagati a caro prezzo.
+    chunks_totali = len(chunks)
+    if chunks_totali > QA_MAX_PARTI:
+        chunks = chunks[:QA_MAX_PARTI]
+        log_message(
+            session_id,
+            f"ℹ️ Quality Check limitato alle prime {QA_MAX_PARTI} parti su "
+            f"{chunks_totali}: oltre questa soglia l'analisi si frammenta e "
+            "perde valore. La porzione non esaminata e' dichiarata nel report.",
+        )
+
     report_qa = []
-    if len(chunks) > QA_MAX_CHUNK_ATTESI:
+    if chunks_totali > QA_MAX_CHUNK_ATTESI:
         # Oltre questa soglia l'analisi si frammenta: il revisore vede porzioni
         # di file senza il contesto delle altre e segnala falsi positivi, mentre
         # nessuno guarda le interazioni fra parti. Il numero alto di parti e'
@@ -1261,6 +1279,21 @@ def run_implementation_phase(
             logger.exception("Errore durante il Quality Check (%s).", etichetta or "unico")
             log_message(session_id, f"❌ Quality Check fallito ({etichetta or 'unico'}).")
             report_qa.append(f"QUALITY CHECK FALLITO ({etichetta or 'unico'})")
+
+    if chunks_totali > len(chunks):
+        # Il cliente deve sapere che il verdetto non copre tutto il codice:
+        # un report che tace l'omissione e' peggio di uno incompleto.
+        report_qa.append(
+            "## Copertura del Quality Check\n\n"
+            f"Il codice generato e' stato suddiviso in {chunks_totali} blocchi di analisi. "
+            f"Ne sono stati esaminati i primi {len(chunks)}: oltre questa soglia il "
+            "revisore perde il contesto delle porzioni gia' viste e produce "
+            "segnalazioni inaffidabili.\n\n"
+            f"**La restante parte del codice non e' stata sottoposta a Quality Check** "
+            "e va revisionata dal team prima della messa in produzione. Un numero "
+            "cosi' alto di blocchi indica spesso codice duplicato fra i file "
+            "generati: verificare quel punto riduce anche il volume da revisionare."
+        )
 
     esiti["quality_report"] = "\n\n---\n\n".join(report_qa)
 
