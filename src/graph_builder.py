@@ -29,17 +29,22 @@ def _abilita_memo_foxpro():
     apertura_originale = _dbfread_memo.open_memofile
 
     def trova_memo(nome_dbf):
-        for estensione in ('.fpt', '.dbt', '.sct', '.vct', '.mnt'):
+        for estensione in ('.fpt', '.dbt', '.sct', '.vct', '.mnt',
+                           '.dct', '.frt', '.lbt', '.pjt'):
             trovato = _dbfread_memo.ifind(nome_dbf, ext=estensione)
             if trovato:
                 return trovato
         return None
 
     def apri_memo(nome_file, versione_db):
-        # .sct e .vct usano lo stesso formato del .fpt: vanno letti dal
-        # lettore FoxPro, non da quello dBase IV (che fallisce con
-        # "unpack requires a buffer of 8 bytes").
-        if nome_file.lower().endswith(('.fpt', '.sct', '.vct', '.mnt')):
+        # Tutti i memo FoxPro usano lo stesso formato del .fpt e vanno letti
+        # dal lettore FoxPro, non da quello dBase IV (che fallisce con
+        # "unpack requires a buffer of 8 bytes"):
+        #   .sct Form | .vct Class Library | .mnt Menu
+        #   .dct Database Container | .frt Report | .lbt Etichette
+        #   .pjt Progetto
+        if nome_file.lower().endswith(('.fpt', '.sct', '.vct', '.mnt',
+                                       '.dct', '.frt', '.lbt', '.pjt')):
             return _dbfread_memo.VFPMemoFile(nome_file)
         return apertura_originale(nome_file, versione_db)
 
