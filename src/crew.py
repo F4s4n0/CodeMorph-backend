@@ -344,6 +344,25 @@ def _normalizza_percorsi(testo, registro_cartelle, e_frontend):
             registro_cartelle[chiave] = segmento
         return registro_cartelle[chiave]
 
+    def _sembra_nome_progetto(segmento):
+        """
+        True se il segmento ha la forma di un nome di progetto .NET.
+
+        Criterio: contiene un punto (`Rum.Web`, `CheckDB.Api`) oppure e' un
+        nome capitalizzato che non corrisponde a una cartella interna nota.
+        Le cartelle interne (`Services`, `Pages`, `Models`, `features`) sono
+        quelle che, prese per progetti, fanno finire i file fuori posto.
+        """
+        cartelle_note = {
+            "services", "pages", "models", "components", "shared", "wwwroot",
+            "controllers", "entities", "interfaces", "dtos", "common", "clients",
+            "features", "types", "utils", "helpers", "hooks", "assets", "styles",
+            "repositories", "migrations", "configuration", "extensions", "data",
+        }
+        if segmento.lower() in cartelle_note:
+            return False
+        return "." in segmento or segmento[:1].isupper()
+
     def _canonica_progetto(segmento):
         """
         Nome del progetto (primo segmento dopo la radice), unificato anche
@@ -359,7 +378,11 @@ def _normalizza_percorsi(testo, registro_cartelle, e_frontend):
         chiave = segmento.lower().replace("_", ".")
         if chiave not in registro_cartelle:
             registro_cartelle[chiave] = segmento
-        return registro_cartelle[chiave]
+        canonico = registro_cartelle[chiave]
+        # Si ricorda il progetto di quest'area: serve a recuperare i percorsi
+        # in cui l'agente lo ha omesso del tutto.
+        registro_cartelle.setdefault(f"_progetto_{radice_area}", canonico)
+        return canonico
 
     def _sistema(match):
         nonlocal conteggio
@@ -384,7 +407,20 @@ def _normalizza_percorsi(testo, registro_cartelle, e_frontend):
         # piu' larghe (punti e underscore equivalenti); gli altri sono
         # cartelle interne, dove conta solo la differenza di maiuscole.
         if len(parti) > 1:
-            cartelle = [_canonica_progetto(parti[0])] + [_canonica(p) for p in parti[1:-1]]
+            # Il primo segmento e' il nome del progetto SOLO se ne ha la forma.
+            # Quando l'agente scrive direttamente la cartella interna —
+            # `src/frontend/Services/X.cs` invece di
+            # `src/frontend/Rum.Web/Services/X.cs` — il file finisce FUORI dal
+            # progetto e non viene compilato. Su un giro reale e' successo a 32
+            # file, con cartelle `features/` e `types/` prese da convenzioni di
+            # un altro stack.
+            if _sembra_nome_progetto(parti[0]):
+                cartelle = [_canonica_progetto(parti[0])] + [_canonica(p) for p in parti[1:-1]]
+            else:
+                # Manca il progetto: si inserisce quello gia' visto per
+                # quest'area, cosi' il file rientra dove deve stare.
+                progetto = registro_cartelle.get(f"_progetto_{radice_area}")
+                cartelle = ([progetto] if progetto else []) + [_canonica(p) for p in parti[:-1]]
         else:
             cartelle = []
         nuovo = "/".join((["tests"] if e_test else ["src"]) + [radice_area] + cartelle + [parti[-1]])
@@ -635,6 +671,34 @@ def _read_if_exists(path, fallback):
 # =====================================================================
 # FASE 1 - UNDERSTANDING
 # =====================================================================
+
+def _interfacce_senza_implementazione(codice):
+    """
+    Interfacce dichiarate nel codice generato che nessuna classe implementa.
+
+    E' il difetto che impedisce all'applicazione di AVVIARSI: l'interfaccia
+    viene registrata nella dependency injection, il contenitore cerca
+    l'implementazione e non la trova. Nasce perche' l'agente dichiara il
+    contratto mentre scrive il servizio che lo usa, contando su un passaggio
+    successivo che non arriva mai — su un progetto reale sono rimaste orfane
+    15 interfacce su 71.
+
+    Il controllo e' deterministico: un'istruzione nel prompt non garantisce
+    che l'agente se ne ricordi 200 file dopo.
+    """
+    dichiarate = set(re.findall(r"\binterface\s+(I[A-Za-z0-9_]+)", codice or ""))
+    if not dichiarate:
+        return []
+
+    implementate = set()
+    # `class X : IFoo, IBar<T>` — si raccolgono tutti i tipi base, poi si
+    # tiene solo cio' che corrisponde a un'interfaccia dichiarata.
+    for m in re.finditer(r"\bclass\s+\w+\s*(?:<[^>]*>)?\s*:\s*([^{\n]+)", codice):
+        for base in m.group(1).split(","):
+            implementate.add(base.strip().split("<")[0].strip())
+
+    return sorted(dichiarate - implementate)
+
 
 def _verifica_copertura_inventario(output_dir, codice_legacy, session_id):
     """
@@ -1293,6 +1357,31 @@ def run_implementation_phase(
             "e va revisionata dal team prima della messa in produzione. Un numero "
             "cosi' alto di blocchi indica spesso codice duplicato fra i file "
             "generati: verificare quel punto riduce anche il volume da revisionare."
+        )
+
+    # Interfacce orfane: verifica DETERMINISTICA, non affidata al revisore.
+    # Va in coda al Quality Check invece che in un documento a parte: e' il
+    # file che il cliente apre davvero, e un rilievo isolato altrove non
+    # verrebbe letto.
+    orfane = _interfacce_senza_implementazione(codice_completo)
+    if orfane:
+        log_message(
+            session_id,
+            f"⚠️ {len(orfane)} interfacce dichiarate senza implementazione: "
+            "il progetto non si avvierebbe finche' non vengono completate. "
+            "L'elenco e' in coda al Quality Check.",
+        )
+        logger.warning("Interfacce orfane nel codice generato: %s", ", ".join(orfane))
+        report_qa.append(
+            "## Interfacce dichiarate senza implementazione\n\n"
+            f"Il controllo automatico ha rilevato **{len(orfane)} interfacce** "
+            "dichiarate nel codice generato per le quali non esiste una classe "
+            "che le implementi.\n\n"
+            "**Impatto:** se registrate nella dependency injection, "
+            "l'applicazione non si avvia — il contenitore cerca "
+            "l'implementazione e non la trova. Vanno completate prima di "
+            "compilare il progetto.\n\n"
+            + "\n".join(f"- `{i}`" for i in orfane)
         )
 
     esiti["quality_report"] = "\n\n---\n\n".join(report_qa)
