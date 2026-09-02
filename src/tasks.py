@@ -669,6 +669,13 @@ def get_iterative_implementation_tasks(
         expected_output=(
             f"Il codice sorgente Backend rifattorizzato per il file {nome_file_legacy}, "
             "completo di unit test, nel formato /// FILEPATH richiesto.\n"
+            "REGOLA DEI TEST: i test devono invocare SOLO metodi che esistono "
+            "davvero, con la firma esatta che hai scritto. Prima di scrivere un "
+            "test rileggi la classe che stai testando e copia il nome del metodo "
+            "e i suoi parametri: un test che chiama un metodo inesistente non "
+            "compila, e blocca l'intera suite anche se il resto del codice e' "
+            "corretto. Se un comportamento ti sembra mancante, aggiungi il "
+            "metodo alla classe invece di testarlo come se ci fosse.\n"
             "REGOLA DELLE INTERFACCE: ogni interfaccia che dichiari deve avere, "
             "NELLO STESSO OUTPUT, la classe che la implementa. Non rimandare "
             "l'implementazione a un file successivo: quel passaggio non "
@@ -704,7 +711,20 @@ def get_iterative_implementation_tasks(
         FILE LEGACY ORIGINALE (per capire l'intento della UX):
         {safe_legacy}
 
-        Non usare librerie vecchie. Chiama gli endpoint REST del backend.
+        ENDPOINT: LEGGILI, NON DEDURLI.
+        Il codice backend ti viene fornito come contesto: prima di scrivere una
+        sola chiamata HTTP, ESTRAI dai controller le rotte reali — l'attributo
+        di routing della classe piu' quello di ogni metodo — e i tipi esatti che
+        restituiscono. Usa quelli alla lettera.
+        NON inventare endpoint "logici" che ti sembrano piu' comodi: se il
+        backend espone due rotte separate non chiamarne una aggregata che non
+        esiste, e se restituisce un oggetto singolo non aspettarti una lista.
+        Una chiamata a una rotta inesistente compila ma fallisce a runtime con
+        404, e nessuno se ne accorge finche' un utente non apre quella pagina.
+        Se ti serve un'aggregazione che il backend non fornisce, componila nel
+        frontend con piu' chiamate alle rotte che esistono davvero.
+
+        Non usare librerie vecchie.
 
         CONFINE INVALICABILE — NON RIPRODURRE IL BACKEND:
         Il codice backend per questo file È GIÀ STATO SCRITTO dal tuo collega e ti

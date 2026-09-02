@@ -1168,6 +1168,25 @@ def run_implementation_phase(
             if _p1 or _p2:
                 logger.info("%s: normalizzati %d percorsi di file.", nome_file, _p1 + _p2)
 
+            # Stesso percorso dichiarato piu' volte nello stesso output: il
+            # code unpacker scrive l'ultima versione, e non e' detto sia quella
+            # giusta. Su un giro reale sono state generate due varianti di uno
+            # stesso componente con endpoint incompatibili, ed e' sopravvissuta
+            # quella che chiamava una rotta inesistente.
+            for etichetta, testo in (("backend", output_backend), ("frontend", output_frontend)):
+                percorsi = [x.strip() for x in re.findall(r"///\s*FILEPATH:\s*(.+)", testo)]
+                ripetuti = sorted({p for p in percorsi if percorsi.count(p) > 1})
+                if ripetuti:
+                    log_message(
+                        session_id,
+                        f"⚠️ {nome_file} ({etichetta}): {len(ripetuti)} file dichiarati "
+                        "piu' volte nello stesso output. Viene salvata l'ultima "
+                        "versione, che potrebbe non essere quella corretta: "
+                        + ", ".join(ripetuti[:3]),
+                    )
+                    logger.warning("%s (%s): percorsi duplicati -> %s",
+                                   nome_file, etichetta, ", ".join(ripetuti))
+
             # Rete di sicurezza per il resume: un file scritto da una versione
             # precedente (o da una run interrotta) puo' esistere senza
             # intestazione. Si aggiunge qui, una volta sola.
