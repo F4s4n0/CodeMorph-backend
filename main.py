@@ -696,6 +696,11 @@ def _lavoro_fase1(session_id, user_id, provider_llm, modello_llm,
             codice_da_analizzare = process_directory_to_graph(
                 cartella_sorgenti, llm, session_id, tracker=tracker,
                 file_ammessi=set(file_ammessi) if file_ammessi else None,
+                # Il grafo delle dipendenze viene salvato accanto ai
+                # deliverable: e' l'unico dato oggettivo sulla struttura del
+                # sistema e serve alle fasi successive, non solo a comporre
+                # il contesto di questa.
+                output_dir=str(cartella_output),
             )
         else:
             log_message(session_id, "📝 Analisi dello script di testo singolo avviata...")
