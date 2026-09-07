@@ -531,6 +531,95 @@ def raccogli_sorgenti(cartella_sorgente, max_caratteri=None, file_ammessi=None):
 
     return "".join(parti)
 
+def analizza_cluster(G):
+    """
+    Individua i gruppi di file che formano un dominio: molto legati fra loro,
+    poco verso l'esterno.
+
+    Serve a due cose. La PRIMA e' l'ordine di migrazione: la Fase 3 oggi
+    processa i file nell'ordine in cui arrivano, e due file dello stesso
+    dominio migrati a distanza producono tipi incompatibili — e' successo con
+    `CheckDB.Cognos.cs` e `CognosHealthCheck.cs`, che hanno generato due
+    interfacce con lo stesso nome e firme diverse.
+
+    La SECONDA riguarda i sistemi grandi: su un monolite da migliaia di file
+    non si migra tutto in una volta nemmeno a mano. Si divide per domini e se
+    ne affronta uno per volta. Questi cluster sono i confini su cui tagliare,
+    misurati sul grafo reale invece che dedotti dai nomi delle cartelle.
+
+    Ritorna una lista di cluster ordinati per dimensione, ciascuno con i suoi
+    file e il numero di legami verso l'esterno (piu' e' basso, piu' quel
+    dominio e' migrabile in isolamento).
+    """
+    if G is None or G.number_of_nodes() == 0:
+        return []
+
+    # Le dipendenze contano in entrambi i sensi per capire cosa "sta insieme":
+    # A che chiama B li lega, a prescindere dalla direzione.
+    non_orientato = G.to_undirected()
+
+    gruppi = []
+    try:
+        # greedy_modularity_communities trova i domini anche quando il grafo
+        # e' un unico blocco connesso — cosa tipica dei monoliti, dove esiste
+        # sempre un modulo di utilita' chiamato da tutti.
+        from networkx.algorithms.community import greedy_modularity_communities
+        gruppi = [set(c) for c in greedy_modularity_communities(non_orientato)]
+    except Exception:
+        # Ripiego: le componenti connesse. Piu' grossolano ma sempre valido.
+        gruppi = [set(c) for c in nx.connected_components(non_orientato)]
+
+    cluster = []
+    for gruppo in gruppi:
+        esterni = sum(
+            1 for n in gruppo for vicino in non_orientato.neighbors(n)
+            if vicino not in gruppo
+        )
+        cluster.append({
+            "file": sorted(gruppo),
+            "dimensione": len(gruppo),
+            "legami_esterni": esterni,
+        })
+    cluster.sort(key=lambda c: -c["dimensione"])
+    return cluster
+
+
+def salva_grafo(G, output_dir, session_id=None):
+    """
+    Persiste il grafo delle dipendenze e i cluster individuati.
+
+    Il grafo veniva costruito, usato una volta per comporre il contesto e poi
+    buttato. E' invece l'unico dato OGGETTIVO sulla struttura del sistema —
+    tutto il resto sono letture di un modello — e serve alle fasi successive.
+    """
+    if G is None:
+        return None
+    try:
+        cluster = analizza_cluster(G)
+        dati = {
+            "nodi": G.number_of_nodes(),
+            "archi": G.number_of_edges(),
+            "dipendenze": {n: sorted(G.successors(n)) for n in G.nodes()},
+            "cluster": cluster,
+        }
+        percorso = os.path.join(str(output_dir), "_grafo_dipendenze.json")
+        with open(percorso, "w", encoding="utf-8") as f:
+            json.dump(dati, f, ensure_ascii=False, indent=2)
+
+        if session_id and cluster:
+            isolati = sum(1 for c in cluster if c["legami_esterni"] == 0)
+            log_message(
+                session_id,
+                f"🔗 Grafo: {G.number_of_nodes()} file, {G.number_of_edges()} dipendenze, "
+                f"{len(cluster)} domini individuati"
+                + (f" ({isolati} completamente isolati)" if isolati else "") + ".",
+            )
+        return dati
+    except Exception as e:
+        logger.warning("Grafo delle dipendenze non salvato: %s", e)
+        return None
+
+
 def _componi_contesto(G, sorgenti, session_id=None, modello=None):
     """
     Contesto per gli agenti della Fase 1: il grafo delle relazioni PIÙ il
@@ -608,7 +697,8 @@ def _genera_report_grafo(G):
     return "\n".join(righe)
 
 
-def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None, file_ammessi=None):
+def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None,
+                               file_ammessi=None, output_dir=None):
     """
     Itera sui file applicando filtri avanzati (parser nativi per FoxPro,
     lettura diretta per il codice standard), costruisce il grafo delle
@@ -650,6 +740,11 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None,
                 log_message(session_id, f"Errore IA su {file}: {e}")
 
     log_message(session_id, "Calcolo delle dipendenze strutturali completato. Generazione report...")
+
+    # Il grafo e' l'unico dato oggettivo sulla struttura del sistema: va
+    # conservato, non consumato e buttato.
+    if output_dir:
+        salva_grafo(G, output_dir, session_id)
     # Il nome del modello si ricava dall'oggetto LLM gia' in mano: evita di
     # propagare un parametro in piu' lungo tutta la catena di chiamate.
     nome_modello = getattr(llm, "model", None) or getattr(llm, "model_name", None)
