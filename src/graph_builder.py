@@ -377,14 +377,29 @@ def extract_dependencies_from_file(file_name, file_content, llm, tracker=None):
         description=(
             f"Analizza l'entità denominata '{file_name}'. "
             f"Il suo contenuto o schema estratto è il seguente:\n\n{file_content}\n\n"
-            "Identifica le dipendenze (altre tabelle chiamate, altre form invocate "
-            "tramite DO FORM, o file esterni).\n"
+            "Identifica le dipendenze DISTINGUENDOLE PER TIPO. Sono relazioni di "
+            "natura diversa e vanno tenute separate: mescolarle rende impossibile "
+            "capire quali moduli formano un dominio e quali dati sono condivisi "
+            "fra domini.\n"
+            "- `chiama`: altri MODULI DI CODICE invocati (DO, DO FORM, CALL, "
+            "SET PROCEDURE, import di classi). E' la dipendenza funzionale: dice "
+            "quali file lavorano insieme.\n"
+            "- `usa_dati`: TABELLE, viste o cursori letti o scritti (USE, SELECT, "
+            "INSERT, UPDATE, nomi di tabella nelle query). Dice quali strutture "
+            "dati il modulo tocca.\n"
+            "- `risorse`: file statici non eseguibili (immagini .bmp/.ico, "
+            "documenti, fogli di calcolo). Servono all'inventario ma NON sono "
+            "dipendenze architetturali.\n"
             "Restituisci SOLO un oggetto JSON con questo esatto formato:\n"
             "{\n"
             '  "file": "nome_di_questo_file",\n'
-            '  "depends_on": ["tabella_db_o_form_collegata_1", "entita_collegata_2"]\n'
+            '  "chiama": ["modulo1.prg", "form2.scx"],\n'
+            '  "usa_dati": ["tabella1", "vista2"],\n'
+            '  "risorse": ["icona.bmp"]\n'
             "}\n"
-            "Se non rilevi dipendenze esplicite, restituisci una lista vuota []."
+            "Ogni lista puo' essere vuota. Non inserire lo stesso nome in due "
+            "liste diverse: scegli quella che descrive come il file lo usa "
+            "DAVVERO."
         ),
         expected_output="Una stringa JSON formattata correttamente.",
         agent=extractor_agent,
@@ -533,55 +548,81 @@ def raccogli_sorgenti(cartella_sorgente, max_caratteri=None, file_ammessi=None):
 
 def analizza_cluster(G):
     """
-    Individua i gruppi di file che formano un dominio: molto legati fra loro,
-    poco verso l'esterno.
+    Individua i DOMINI FUNZIONALI usando le sole dipendenze di CHIAMATA.
 
-    Serve a due cose. La PRIMA e' l'ordine di migrazione: la Fase 3 oggi
-    processa i file nell'ordine in cui arrivano, e due file dello stesso
-    dominio migrati a distanza producono tipi incompatibili — e' successo con
-    `CheckDB.Cognos.cs` e `CognosHealthCheck.cs`, che hanno generato due
-    interfacce con lo stesso nome e firme diverse.
+    Il punto decisivo e' l'esclusione degli archi verso le tabelle. In un
+    gestionale le stesse strutture dati sono lette da moduli di aree diverse:
+    contandole come dipendenze, ogni dominio risulta legato a tutti gli altri
+    e il clustering restituisce un unico grumo — su un progetto reale il
+    cluster piu' grande aveva 29 file e 151 legami esterni, cioe' piu' legami
+    che file.
 
-    La SECONDA riguarda i sistemi grandi: su un monolite da migliaia di file
-    non si migra tutto in una volta nemmeno a mano. Si divide per domini e se
-    ne affronta uno per volta. Questi cluster sono i confini su cui tagliare,
-    misurati sul grafo reale invece che dedotti dai nomi delle cartelle.
-
-    Ritorna una lista di cluster ordinati per dimensione, ciascuno con i suoi
-    file e il numero di legami verso l'esterno (piu' e' basso, piu' quel
-    dominio e' migrabile in isolamento).
+    Le tabelle condivise restano informazione preziosa, ma appartengono a
+    un'altra domanda (dove si puo' tagliare il database) e si analizzano a
+    parte con `analizza_dati_condivisi`.
     """
     if G is None or G.number_of_nodes() == 0:
         return []
 
-    # Le dipendenze contano in entrambi i sensi per capire cosa "sta insieme":
-    # A che chiama B li lega, a prescindere dalla direzione.
-    non_orientato = G.to_undirected()
+    # Sottografo delle sole chiamate fra moduli.
+    chiamate = nx.DiGraph()
+    for a, b, dati in G.edges(data=True):
+        if dati.get("tipo") in ("chiama", "non_classificata"):
+            chiamate.add_edge(a, b)
+    if chiamate.number_of_nodes() == 0:
+        chiamate = G.copy()          # grafo vecchio senza tipi: si usa tutto
 
-    gruppi = []
+    non_orientato = chiamate.to_undirected()
     try:
-        # greedy_modularity_communities trova i domini anche quando il grafo
-        # e' un unico blocco connesso — cosa tipica dei monoliti, dove esiste
-        # sempre un modulo di utilita' chiamato da tutti.
+        # Trova i domini anche quando il grafo e' un unico blocco connesso,
+        # cosa tipica dei monoliti: c'e' sempre un modulo di utilita' che
+        # chiamano tutti.
         from networkx.algorithms.community import greedy_modularity_communities
         gruppi = [set(c) for c in greedy_modularity_communities(non_orientato)]
     except Exception:
-        # Ripiego: le componenti connesse. Piu' grossolano ma sempre valido.
         gruppi = [set(c) for c in nx.connected_components(non_orientato)]
 
     cluster = []
     for gruppo in gruppi:
-        esterni = sum(
-            1 for n in gruppo for vicino in non_orientato.neighbors(n)
-            if vicino not in gruppo
-        )
+        esterni = sum(1 for n in gruppo for v in non_orientato.neighbors(n)
+                      if v not in gruppo)
+        # Tabelle toccate dal dominio: servono a capire se e' migrabile da solo.
+        tabelle = sorted({b for n in gruppo for _, b, d in G.out_edges(n, data=True)
+                          if d.get("tipo") == "usa_dati"})
         cluster.append({
             "file": sorted(gruppo),
             "dimensione": len(gruppo),
             "legami_esterni": esterni,
+            "tabelle_usate": tabelle,
         })
     cluster.sort(key=lambda c: -c["dimensione"])
     return cluster
+
+
+def analizza_dati_condivisi(G, cluster):
+    """
+    Tabelle usate da PIU' domini: sono i punti in cui il database non si puo'
+    tagliare senza decidere chi ne resta proprietario.
+
+    E' la domanda che un architetto si pone per prima davanti a un monolite,
+    e finora il DBA doveva dedurla leggendo tutto il codice.
+    """
+    if not cluster:
+        return []
+
+    dominio_di = {f: i for i, c in enumerate(cluster) for f in c["file"]}
+    usata_da = {}
+    for a, b, dati in G.edges(data=True):
+        if dati.get("tipo") != "usa_dati":
+            continue
+        d = dominio_di.get(a)
+        if d is not None:
+            usata_da.setdefault(b, set()).add(d)
+
+    condivise = [{"tabella": t, "domini": sorted(d), "quanti_domini": len(d)}
+                 for t, d in usata_da.items() if len(d) > 1]
+    condivise.sort(key=lambda x: -x["quanti_domini"])
+    return condivise
 
 
 def salva_grafo(G, output_dir, session_id=None):
@@ -596,11 +637,26 @@ def salva_grafo(G, output_dir, session_id=None):
         return None
     try:
         cluster = analizza_cluster(G)
+        condivise = analizza_dati_condivisi(G, cluster)
+        per_tipo = {}
+        for _, _, d in G.edges(data=True):
+            t = d.get("tipo", "non_classificata")
+            per_tipo[t] = per_tipo.get(t, 0) + 1
         dati = {
             "nodi": G.number_of_nodes(),
             "archi": G.number_of_edges(),
-            "dipendenze": {n: sorted(G.successors(n)) for n in G.nodes()},
+            "archi_per_tipo": per_tipo,
+            "dipendenze": {
+                n: {
+                    "chiama": sorted(b for _, b, d in G.out_edges(n, data=True)
+                                     if d.get("tipo") in ("chiama", "non_classificata")),
+                    "usa_dati": sorted(b for _, b, d in G.out_edges(n, data=True)
+                                       if d.get("tipo") == "usa_dati"),
+                }
+                for n in G.nodes()
+            },
             "cluster": cluster,
+            "tabelle_condivise": condivise,
         }
         percorso = os.path.join(str(output_dir), "_grafo_dipendenze.json")
         with open(percorso, "w", encoding="utf-8") as f:
@@ -610,9 +666,12 @@ def salva_grafo(G, output_dir, session_id=None):
             isolati = sum(1 for c in cluster if c["legami_esterni"] == 0)
             log_message(
                 session_id,
-                f"🔗 Grafo: {G.number_of_nodes()} file, {G.number_of_edges()} dipendenze, "
-                f"{len(cluster)} domini individuati"
-                + (f" ({isolati} completamente isolati)" if isolati else "") + ".",
+                f"🔗 Grafo: {G.number_of_nodes()} nodi, {G.number_of_edges()} dipendenze "
+                f"({per_tipo.get('chiama', 0)} chiamate, {per_tipo.get('usa_dati', 0)} accessi a dati). "
+                f"{len(cluster)} domini funzionali"
+                + (f", {isolati} isolabili senza dipendenze esterne" if isolati else "")
+                + (f". {len(condivise)} tabelle condivise fra domini" if condivise else "")
+                + ".",
             )
         return dati
     except Exception as e:
@@ -732,8 +791,22 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None,
                 nodo_principale = dati_json.get("file", file)
                 G.add_node(nodo_principale)
 
+                # Gli archi sono TIPIZZATI: `chiama` e `usa_dati` sono
+                # dipendenze architetturali di natura diversa, e tenerle
+                # separate permette di analizzare i domini funzionali senza
+                # che le tabelle condivise li facciano collassare in un unico
+                # blocco. `risorse` resta fuori dal grafo: un'icona non e' una
+                # dipendenza, e' un file allegato.
+                for dipendenza in dati_json.get("chiama", []):
+                    G.add_edge(nodo_principale, dipendenza, tipo="chiama")
+                for tabella in dati_json.get("usa_dati", []):
+                    G.add_edge(nodo_principale, tabella, tipo="usa_dati")
+
+                # Compatibilita' con il formato precedente: se il modello
+                # risponde ancora con `depends_on` non si perde nulla.
                 for dipendenza in dati_json.get("depends_on", []):
-                    G.add_edge(nodo_principale, dipendenza)
+                    if not G.has_edge(nodo_principale, dipendenza):
+                        G.add_edge(nodo_principale, dipendenza, tipo="non_classificata")
             except interruzione.FaseInterrotta:
                 raise
             except Exception as e:
