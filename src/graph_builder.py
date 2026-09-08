@@ -546,6 +546,47 @@ def raccogli_sorgenti(cartella_sorgente, max_caratteri=None, file_ammessi=None):
 
     return "".join(parti)
 
+# Estensioni e marcatori dei componenti che NON fanno parte del sistema:
+# driver, librerie di sistema, automazione Office.
+_MARCATORI_ESTERNI = (
+    ".dll", ".ocx", ".tlb", "zkemkeeper", "chilkat", "msxml", "scripting.",
+    "excel.", "word.", "adodb.", "wtsapi", "advapi", "iphlpapi", "kernel32",
+    "user32", "shell.", "wscript",
+)
+
+# Oltre questa quota di moduli che lo chiamano, un file e' una libreria di
+# utilita': non definisce un dominio, lo attraversa.
+_SOGLIA_UTILITA = 0.10
+
+
+def _componenti_esterni(G):
+    """Nodi che sono componenti di terze parti, non file del sistema."""
+    return {
+        n for n in G.nodes()
+        if any(m in str(n).lower() for m in _MARCATORI_ESTERNI)
+    }
+
+
+def _librerie_di_utilita(G, soglia=_SOGLIA_UTILITA):
+    """
+    Moduli chiamati da una quota rilevante del sistema.
+
+    Sono le librerie di funzioni condivise (in FoxPro tipicamente un file di
+    UDF impostato con SET PROCEDURE): legano fra loro moduli che non hanno
+    nulla in comune, e tenerli nel grafo dei domini produce un unico blocco.
+    """
+    chiamanti = {}
+    for a, b, dati in G.edges(data=True):
+        if dati.get("tipo") in ("chiama", "non_classificata"):
+            chiamanti.setdefault(b, set()).add(a)
+    moduli = {a for a, _, d in G.edges(data=True)
+              if d.get("tipo") in ("chiama", "non_classificata")}
+    if not moduli:
+        return set()
+    minimo = max(3, int(len(moduli) * soglia))
+    return {b for b, chi in chiamanti.items() if len(chi) >= minimo}
+
+
 def analizza_cluster(G):
     """
     Individua i DOMINI FUNZIONALI usando le sole dipendenze di CHIAMATA.
@@ -564,11 +605,28 @@ def analizza_cluster(G):
     if G is None or G.number_of_nodes() == 0:
         return []
 
-    # Sottografo delle sole chiamate fra moduli.
+    # Sottografo delle sole chiamate fra moduli, ESCLUSI due casi che
+    # creerebbero domini fasulli:
+    #
+    # 1. i componenti ESTERNI (driver COM, DLL di sistema, librerie di terze
+    #    parti): tre programmi che parlano con lo stesso lettore di badge non
+    #    sono un dominio funzionale, sono solo file che usano lo stesso
+    #    hardware. E' successo con `zkemkeeper.zkem.6`, che legava fra loro
+    #    programmi senza alcuna relazione;
+    # 2. le LIBRERIE DI UTILITA' chiamate da mezzo sistema: legano tutto con
+    #    tutto e fanno collassare i domini, esattamente come facevano le
+    #    tabelle condivise prima della tipizzazione.
+    esterni = _componenti_esterni(G)
+    utilita = _librerie_di_utilita(G)
+    da_escludere = esterni | utilita
+
     chiamate = nx.DiGraph()
     for a, b, dati in G.edges(data=True):
-        if dati.get("tipo") in ("chiama", "non_classificata"):
-            chiamate.add_edge(a, b)
+        if dati.get("tipo") not in ("chiama", "non_classificata"):
+            continue
+        if b in da_escludere:
+            continue
+        chiamate.add_edge(a, b)
     if chiamate.number_of_nodes() == 0:
         chiamate = G.copy()          # grafo vecchio senza tipi: si usa tutto
 
