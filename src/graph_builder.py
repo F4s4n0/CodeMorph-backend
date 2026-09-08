@@ -556,7 +556,27 @@ _MARCATORI_ESTERNI = (
 
 # Oltre questa quota di moduli che lo chiamano, un file e' una libreria di
 # utilita': non definisce un dominio, lo attraversa.
-_SOGLIA_UTILITA = 0.10
+#
+# Tarata su un progetto reale: al 10% venivano esclusi anche moduli
+# FUNZIONALI centrali (`hsede`, `menzione`), che sono chiamati da molti punti
+# perche' sono importanti, non perche' siano librerie — ed escluderli spezza
+# domini veri. Al 15% resta solo la libreria di UDF, che e' il bersaglio.
+_SOGLIA_UTILITA = 0.15
+
+
+def _nome_canonico(nodo):
+    """
+    Riduce un riferimento al nome del modulo, senza percorso ne' estensione.
+
+    Lo stesso file viene citato in modi diversi a seconda di come lo si
+    invoca: `c:\\rumsql\\progs\\StdCustom.prg`, `progs\\StdCustom`,
+    `StdCustom.prg`. Contati separatamente nessuno raggiunge la soglia che lo
+    identificherebbe come libreria di utilita', e continua a legare fra loro
+    domini che non c'entrano nulla: su un progetto reale `myudf` risultava
+    chiamato 4 volte invece di 7, restando sotto soglia.
+    """
+    testo = str(nodo).replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return testo.rsplit(".", 1)[0] if "." in testo else testo
 
 
 def _componenti_esterni(G):
@@ -575,16 +595,21 @@ def _librerie_di_utilita(G, soglia=_SOGLIA_UTILITA):
     UDF impostato con SET PROCEDURE): legano fra loro moduli che non hanno
     nulla in comune, e tenerli nel grafo dei domini produce un unico blocco.
     """
+    # Si conta sul nome CANONICO: lo stesso modulo citato con percorsi diversi
+    # e' un solo bersaglio, altrimenti i conteggi si frammentano e nessuna
+    # libreria raggiunge mai la soglia.
     chiamanti = {}
     for a, b, dati in G.edges(data=True):
         if dati.get("tipo") in ("chiama", "non_classificata"):
-            chiamanti.setdefault(b, set()).add(a)
-    moduli = {a for a, _, d in G.edges(data=True)
+            chiamanti.setdefault(_nome_canonico(b), set()).add(_nome_canonico(a))
+    moduli = {_nome_canonico(a) for a, _, d in G.edges(data=True)
               if d.get("tipo") in ("chiama", "non_classificata")}
     if not moduli:
         return set()
     minimo = max(3, int(len(moduli) * soglia))
-    return {b for b, chi in chiamanti.items() if len(chi) >= minimo}
+    utilita = {b for b, chi in chiamanti.items() if len(chi) >= minimo}
+    # Si restituiscono i nodi REALI: servono a filtrare gli archi del grafo.
+    return {n for n in G.nodes() if _nome_canonico(n) in utilita}
 
 
 def analizza_cluster(G):
