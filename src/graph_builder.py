@@ -564,6 +564,52 @@ _MARCATORI_ESTERNI = (
 _SOGLIA_UTILITA = 0.15
 
 
+def _unifica_riferimento(nodo, indice_file):
+    """
+    Riconduce un riferimento al file REALE a cui punta.
+
+    In FoxPro lo stesso file viene citato in molte forme: `DO FORM forms\\dip2`,
+    `dip2.scx`, `forms\\dip2.scx`. Contate come nodi distinti, gonfiano il
+    grafo (726 nodi invece di 443 su un progetto reale) e fanno sembrare i
+    domini piu' grandi di quello che sono.
+
+    `indice_file` mappa il nome senza estensione ai file davvero presenti
+    nell'archivio. Serve a due cose:
+    1. completare l'estensione quando manca;
+    2. riconoscere i riferimenti che NON corrispondono a nessun file — tipico
+       il `SET PATH TO libs, menus, progs`, che l'agente interpreta come
+       chiamata mentre indica solo dove cercare. Quelli vanno scartati.
+
+    Attenzione: NON si unificano file con estensioni diverse. `assenteismo.DBF`
+    e `assenteismo.SCX` sono una tabella e una form, non lo stesso oggetto.
+    """
+    testo = str(nodo).replace("\\", "/").strip()
+    base = testo.rsplit("/", 1)[-1]
+    if not base:
+        return None
+
+    if "." in base:
+        # Ha gia' l'estensione: si tiene il nome file, senza percorso.
+        candidati = indice_file.get(base.lower())
+        return candidati[0] if candidati else base
+
+    # Senza estensione: si cerca il file corrispondente nell'archivio.
+    candidati = indice_file.get(base.lower())
+    if not candidati:
+        # Nessun file con questo nome: e' una cartella di ricerca o un
+        # riferimento a qualcosa che non e' stato caricato.
+        return None
+    if len(candidati) == 1:
+        return candidati[0]
+    # Piu' file omonimi con estensioni diverse: si preferisce il codice
+    # eseguibile, che e' cio' che un `DO` sta chiamando.
+    for preferita in (".prg", ".scx", ".mpr", ".mnx", ".vcx"):
+        for c in candidati:
+            if c.lower().endswith(preferita):
+                return c
+    return candidati[0]
+
+
 def _nome_canonico(nodo):
     """
     Riduce un riferimento al nome del modulo, senza percorso ne' estensione.
@@ -847,6 +893,9 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None,
     dipendenze via IA e scrive i log in tempo reale per il frontend.
     """
     G = nx.DiGraph()
+    # nome (con e senza estensione, minuscolo) -> file reali dell'archivio
+    indice_file = {}
+    dipendenze_grezze = []          # (nodo, json) — risolte a fine ciclo
     sorgenti = []  
 
     for root, dirs, files in os.walk(cartella_sorgente):
@@ -864,6 +913,12 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None,
             if content is None:
                 continue
             sorgenti.append((relativo, content))
+            # Indice dei file REALI: serve a ricondurre i riferimenti al file
+            # a cui puntano davvero, e a scartare quelli che non esistono.
+            indice_file.setdefault(file.lower(), []).append(file)
+            senza_est = file.rsplit(".", 1)[0].lower() if "." in file else file.lower()
+            if senza_est != file.lower():
+                indice_file.setdefault(senza_est, []).append(file)
 
             try:
                 log_message(session_id, f"Analisi dipendenze IA per: {file} ...")
@@ -871,29 +926,44 @@ def process_directory_to_graph(cartella_sorgente, llm, session_id, tracker=None,
                 if DELAY_TRA_FILE_SEC:
                     time.sleep(DELAY_TRA_FILE_SEC)
                 dati_json = extract_dependencies_from_file(file, content, llm, tracker=tracker)
-                nodo_principale = dati_json.get("file", file)
-                G.add_node(nodo_principale)
-
-                # Gli archi sono TIPIZZATI: `chiama` e `usa_dati` sono
-                # dipendenze architetturali di natura diversa, e tenerle
-                # separate permette di analizzare i domini funzionali senza
-                # che le tabelle condivise li facciano collassare in un unico
-                # blocco. `risorse` resta fuori dal grafo: un'icona non e' una
-                # dipendenza, e' un file allegato.
-                for dipendenza in dati_json.get("chiama", []):
-                    G.add_edge(nodo_principale, dipendenza, tipo="chiama")
-                for tabella in dati_json.get("usa_dati", []):
-                    G.add_edge(nodo_principale, tabella, tipo="usa_dati")
-
-                # Compatibilita' con il formato precedente: se il modello
-                # risponde ancora con `depends_on` non si perde nulla.
-                for dipendenza in dati_json.get("depends_on", []):
-                    if not G.has_edge(nodo_principale, dipendenza):
-                        G.add_edge(nodo_principale, dipendenza, tipo="non_classificata")
+                # Le dipendenze si raccolgono ora ma si TRASFORMANO IN ARCHI
+                # dopo il ciclo: risolvere un riferimento richiede di sapere
+                # quali file esistono davvero, e l'indice e' completo solo
+                # quando tutti i file sono stati visti.
+                dipendenze_grezze.append((dati_json.get("file", file), dati_json))
             except interruzione.FaseInterrotta:
                 raise
             except Exception as e:
                 log_message(session_id, f"Errore IA su {file}: {e}")
+
+    # --- Costruzione degli archi, con i riferimenti RISOLTI ------------
+    # Gli archi sono TIPIZZATI: `chiama` e `usa_dati` sono dipendenze di
+    # natura diversa, e tenerle separate permette di analizzare i domini
+    # funzionali senza che le tabelle condivise li facciano collassare in un
+    # unico blocco. `risorse` resta fuori: un'icona non e' una dipendenza.
+    scartati = 0
+    for nodo, dati_json in dipendenze_grezze:
+        principale = _unifica_riferimento(nodo, indice_file) or nodo
+        G.add_node(principale)
+        for chiave, tipo in (("chiama", "chiama"), ("usa_dati", "usa_dati"),
+                             ("depends_on", "non_classificata")):
+            for riferimento in dati_json.get(chiave, []):
+                if tipo == "usa_dati":
+                    # Le tabelle non sono file dell'archivio: si tengono come
+                    # sono, normalizzando solo il nome.
+                    bersaglio = str(riferimento).replace("\\", "/").rsplit("/", 1)[-1]
+                else:
+                    bersaglio = _unifica_riferimento(riferimento, indice_file)
+                    if bersaglio is None:
+                        # Riferimento che non corrisponde a nessun file: e' una
+                        # cartella di ricerca (SET PATH TO) o un componente
+                        # esterno. Non e' una dipendenza fra moduli.
+                        scartati += 1
+                        continue
+                if bersaglio and bersaglio != principale and not G.has_edge(principale, bersaglio):
+                    G.add_edge(principale, bersaglio, tipo=tipo)
+    if scartati:
+        logger.info("Grafo: %d riferimenti scartati (cartelle o file non presenti).", scartati)
 
     log_message(session_id, "Calcolo delle dipendenze strutturali completato. Generazione report...")
 
