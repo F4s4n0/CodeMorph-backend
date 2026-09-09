@@ -700,6 +700,71 @@ def _interfacce_senza_implementazione(codice):
     return sorted(dichiarate - implementate)
 
 
+def _ordina_per_dominio(lista_file, output_dir, session_id=None):
+    """
+    Riordina i file da migrare raggruppando quelli dello stesso dominio.
+
+    La Fase 3 li processava nell'ordine in cui arrivavano. Due file correlati
+    migrati a distanza producono tipi incompatibili: e' successo con
+    `CheckDB.Cognos.cs` e `CognosHealthCheck.cs`, che hanno generato due
+    interfacce omonime con firme diverse. Migrandoli vicini, il secondo trova
+    i tipi del primo nell'elenco di quelli gia' generati e li riusa.
+
+    Serve solo l'ORDINE, non l'isolamento: funziona anche su cluster
+    imperfetti, perche' il beneficio nasce dalla vicinanza. Se il grafo non
+    c'e' — sessione vecchia, codice incollato — si mantiene l'ordine attuale.
+
+    Due criteri:
+    - i cluster GRANDI per primi: i loro tipi saranno disponibili quando si
+      arriva ai file isolati;
+    - dentro ogni cluster, prima chi NON chiama nessuno (le foglie del grafo),
+      perche' sono quelli che definiscono i tipi usati dagli altri.
+    """
+    percorso = os.path.join(str(output_dir), "_grafo_dipendenze.json")
+    if not os.path.isfile(percorso):
+        return lista_file
+
+    try:
+        with open(percorso, encoding="utf-8") as f:
+            grafo = json.load(f)
+    except Exception as e:
+        logger.warning("Grafo non leggibile per l'ordinamento: %s", e)
+        return lista_file
+
+    cluster = grafo.get("cluster") or []
+    dipendenze = grafo.get("dipendenze") or {}
+    if not cluster:
+        return lista_file
+
+    def _chiave(nome):
+        base = str(nome).replace("\\", "/").rsplit("/", 1)[-1].lower()
+        return base.rsplit(".", 1)[0] if "." in base else base
+
+    # dominio di appartenenza per ogni file, e quante chiamate fa
+    dominio = {}
+    for i, c in enumerate(sorted(cluster, key=lambda x: -x.get("dimensione", 0))):
+        for f in c.get("file", []):
+            dominio.setdefault(_chiave(f), i)
+    uscenti = {_chiave(n): len(v.get("chiama") or []) for n, v in dipendenze.items()}
+
+    def _posizione(file_info):
+        k = _chiave(file_info.get("nome", ""))
+        # I file senza dominio noto vanno in fondo, dopo i gruppi.
+        return (dominio.get(k, len(cluster) + 1), uscenti.get(k, 0), k)
+
+    ordinata = sorted(lista_file, key=_posizione)
+    raggruppati = sum(1 for f in ordinata if _chiave(f.get("nome", "")) in dominio)
+    if session_id and raggruppati:
+        log_message(
+            session_id,
+            f"🧭 Ordine di migrazione per dominio: {raggruppati} file su "
+            f"{len(ordinata)} raggruppati in {len(cluster)} domini. "
+            "I file correlati vengono migrati vicini, cosi' il secondo riusa "
+            "i tipi definiti dal primo.",
+        )
+    return ordinata
+
+
 def _verifica_copertura_inventario(output_dir, codice_legacy, session_id):
     """
     Controlla che OGNI file dato in pasto agli agenti compaia nei documenti,
@@ -1040,6 +1105,11 @@ def run_implementation_phase(
         session_id,
         f"⚙️ Fase 3: {totale} file legacy in coda di migrazione verso {linguaggio_target}.",
     )
+
+    # I file correlati vengono migrati vicini: senza, due moduli dello stesso
+    # dominio processati a distanza generano tipi incompatibili.
+    lista_file_legacy_estratti = _ordina_per_dominio(
+        lista_file_legacy_estratti, output_dir, session_id)
 
     # 3. IL CICLO ITERATIVO: un file legacy alla volta
     for indice, file_info in enumerate(lista_file_legacy_estratti, start=1):
