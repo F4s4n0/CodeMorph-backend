@@ -7,7 +7,9 @@ from crewai import Task
 from src.config import (
     CONVENZIONI_FASE1,
     MAX_PROGETTI_ATTESI,
-    STRUTTURA_SOLUTION_RULES,
+    PROFILO_DESKTOP,
+    profilo_architettura,
+    struttura_solution_rules,
     FILE_ASSESSMENT,
     FILE_DEPENDENCY_MAP,
     FILE_TECH_DOC,
@@ -344,12 +346,25 @@ def get_understanding_tasks(agents, output_dir, numero_file=0):
 # FASE 2 - DESIGN
 # =====================================================================
 
-def get_design_tasks(agents, output_dir, contesto_fase1="", numero_file=0):
+def get_design_tasks(agents, output_dir, contesto_fase1="", numero_file=0,
+                     linguaggio_target=""):
     """
     Ritorna i task per la FASE 2: Design (Universale).
     Prende in input i report validati della fase 1 e produce il piano architetturale.
     Si ferma per il CHECK POINT 2.
+
+    `linguaggio_target` serve a scegliere il PROFILO architetturale (web,
+    desktop...) in Python. Nel prompt lo stesso valore arriva anche come
+    variabile di template {linguaggio_target}, risolta al kickoff: ma a quel
+    punto il testo delle regole e' gia' composto, quindi la scelta del
+    profilo non puo' essere lasciata all'interpretazione del modello.
     """
+    profilo = profilo_architettura(linguaggio_target)
+    oggetto_adr_interfacce = (
+        "lo standard di interazione fra finestre e servizi applicativi"
+        if profilo == PROFILO_DESKTOP
+        else "lo standard delle API"
+    )
     
     # Stesso criterio della Fase 1: l'ampiezza si misura sulla COPERTURA delle
     # decisioni da prendere, non su un numero di sezioni deciso a priori. Con
@@ -396,11 +411,11 @@ def get_design_tasks(agents, output_dir, contesto_fase1="", numero_file=0):
             "logici di scomposizione.\n"
             "2. Gli Architectural Decision Records (ADR) che motivano formalmente la "
             "scelta dei nuovi pattern di design, la struttura delle cartelle, i "
-            "modelli database e lo standard delle API nel nuovo sistema target.\n"
+            "modelli database e " + oggetto_adr_interfacce + " nel nuovo sistema target.\n"
             "3. La STRUTTURA DELLA SOLUTION: l'elenco esatto dei progetti che "
             "comporranno il sistema target. E' la decisione che il cliente approva "
             "al Check Point 2, PRIMA che venga scritta una riga di codice.\n"
-            + STRUTTURA_SOLUTION_RULES
+            + struttura_solution_rules(profilo)
             + "\n\nCODICE SORGENTE LEGACY (evidenza primaria):\n"
             "In caso di discrepanza tra la documentazione della fase precedente "
             "e il codice, fa fede il codice. Non attribuire al sistema componenti, "
@@ -547,6 +562,10 @@ def get_iterative_implementation_tasks(
     safe_funzionale = _escape_braces(contesto_funzionale)
     safe_test = _escape_braces(contesto_test)
 
+    # Qui linguaggio_target e' un parametro Python: il profilo si decide in
+    # codice e i prompt ricevono solo le istruzioni pertinenti.
+    profilo = profilo_architettura(linguaggio_target)
+
     if progetti_esistenti:
         elenco_prog = ", ".join(sorted(progetti_esistenti))
         blocco_progetti = f"""
@@ -562,6 +581,31 @@ def get_iterative_implementation_tasks(
         Solo se una funzionalita' non ha davvero posto in nessuno di essi puoi
         aggiungere un progetto, seguendo ESATTAMENTE la stessa convenzione di
         nomi di quelli elencati.
+"""
+    elif profilo == PROFILO_DESKTOP:
+        # Primo file, profilo desktop: niente Api e niente DTO di trasporto,
+        # perche' le finestre chiamano i servizi nello stesso processo.
+        blocco_progetti = f"""
+        SEI IL PRIMO FILE DELLA MIGRAZIONE: definisci ORA la struttura della
+        solution, e varra' per tutti i file successivi.
+
+        REGOLA DI STRUTTURA (applicazione DESKTOP): dividi per STRATO, non per
+        funzionalita'. Massimo {MAX_PROGETTI_ATTESI} progetti in tutto, con
+        nomi del tipo:
+          <Prodotto>.App    (finestre, controlli e logica di interazione)
+          <Prodotto>.Core   (regole di business e servizi applicativi)
+          <Prodotto>.Data   (accesso al database e ai sistemi esterni)
+          <Prodotto>.Tests  (test unitari)
+
+        NON creare un progetto Api e NON creare un progetto di DTO condivisi:
+        le finestre invocano i servizi in-process, non c'e' trasporto HTTP e
+        non serve un contratto serializzabile fra interfaccia e logica.
+
+        Le aree funzionali del sistema legacy (magazzino, personale,
+        contabilita'...) diventano CARTELLE dentro questi progetti, MAI
+        progetti separati: il numero di progetti non deve crescere con il
+        numero di file migrati. Una sola convenzione di separatori: usa il
+        punto, mai l'underscore.
 """
     else:
         # Primo file della fase: qui l'architettura si DECIDE. I nomi scelti
@@ -633,6 +677,103 @@ def get_iterative_implementation_tasks(
 
     blocco_tipi_esistenti = blocco_progetti + blocco_tipi_esistenti
 
+    # Il perimetro dei due sviluppatori dipende dal PROFILO del target, non
+    # dal linguaggio. Nel profilo web il backend espone endpoint e
+    # l'interfaccia li consuma via HTTP; nel profilo desktop non esistono ne'
+    # endpoint ne' rotte, e le istruzioni web contraddirebbero l'architettura
+    # scelta dal cliente. I testi NON citano un framework specifico: il
+    # profilo desktop copre WinForms come WPF, JavaFX, Qt o Delphi.
+    #
+    # Le radici src/backend/ e src/frontend/ restano le stesse in tutti i
+    # profili: sono una convenzione della piattaforma, su cui crew.py
+    # normalizza i percorsi e main.py separa i deliverable.
+    if profilo == PROFILO_DESKTOP:
+        perimetro_backend = (
+            "NON scrivere controller, endpoint REST o DTO di trasporto: in "
+            "un'applicazione desktop le finestre invocano i servizi "
+            "direttamente, nello stesso processo. Produci servizi applicativi, "
+            "entita' e accesso ai dati, con metodi pubblici pensati per essere "
+            "chiamati dall'interfaccia (parametri semplici, ritorni tipizzati, "
+            "errori comunicati in modo che la finestra possa mostrarli). "
+            "Ignora l'aspetto grafico: le finestre le scrive il tuo collega. "
+            "I percorsi restano sotto src/backend/: e' una convenzione della "
+            "piattaforma e non implica un server."
+        )
+        perimetro_frontend = """\
+        COME SI TRADUCE UNA MASCHERA LEGACY (applicazione desktop):
+        La maschera legacy diventa una finestra del framework desktop scelto
+        (Form in WinForms, Window in WPF, Stage in JavaFX, e cosi' via). Non
+        riscriverne la logica di business: e' gia' nei servizi generati dal
+        tuo collega, che ti vengono forniti come contesto. La finestra dispone
+        i controlli, li lega ai dati e reagisce agli eventi dell'utente.
+
+        SERVIZI: CHIAMALI, NON DEDURLI.
+        Prima di scrivere una chiamata, ESTRAI dal codice del tuo collega i
+        nomi esatti delle classi di servizio, dei metodi pubblici e dei loro
+        parametri, e usali alla lettera: un metodo inventato non compila.
+        NON usare client HTTP e non costruire URL: non esiste un'API da
+        chiamare, il servizio e' un oggetto nello stesso processo. Ricevilo
+        dall'esterno (costruttore o meccanismo di iniezione del framework)
+        invece di istanziarlo dentro i gestori di evento.
+
+        FEDELTA' ALLA MASCHERA ORIGINALE:
+        Ricalca la disposizione dei controlli dell'originale, i testi delle
+        etichette e l'ordine di tabulazione: gli utenti di un gestionale
+        conoscono quelle maschere a memoria e riconoscono i campi dalla
+        posizione. Dove il legacy usa una griglia legata a un cursore o a una
+        tabella, usa il controllo griglia del framework legato alla
+        collezione restituita dal servizio.
+
+        CONFINE INVALICABILE — NON RIPRODURRE LA LOGICA:
+        NON emettere entita' di dominio, servizi, repository, accesso al
+        database o query: sono gia' stati scritti dal tuo collega. Se ti serve
+        una struttura dati che esiste gia', RIUSALA importandola.
+        I percorsi restano sotto src/frontend/: e' una convenzione della
+        piattaforma e non implica un'applicazione web.
+"""
+        nota_output_frontend = (
+            " Nel profilo desktop l'interfaccia e' una finestra: per ogni "
+            "maschera legacy produci il file della finestra — oppure la coppia "
+            "markup piu' code-behind, se il framework la prevede — con i "
+            "controlli e i gestori di evento. Niente client HTTP ne' modelli "
+            "di trasporto."
+        )
+    else:
+        perimetro_backend = (
+            "Ignora completamente la UI, i bottoni o le finestre. Crea solo "
+            "Endpoint REST (Controller) e Classi di Servizio."
+        )
+        perimetro_frontend = """\
+        ENDPOINT: LEGGILI, NON DEDURLI.
+        Il codice backend ti viene fornito come contesto: prima di scrivere una
+        sola chiamata HTTP, ESTRAI dai controller le rotte reali — l'attributo
+        di routing della classe piu' quello di ogni metodo — e i tipi esatti che
+        restituiscono. Usa quelli alla lettera.
+        NON inventare endpoint "logici" che ti sembrano piu' comodi: se il
+        backend espone due rotte separate non chiamarne una aggregata che non
+        esiste, e se restituisce un oggetto singolo non aspettarti una lista.
+        Una chiamata a una rotta inesistente compila ma fallisce a runtime con
+        404, e nessuno se ne accorge finche' un utente non apre quella pagina.
+        Se ti serve un'aggregazione che il backend non fornisce, componila nel
+        frontend con piu' chiamate alle rotte che esistono davvero.
+
+        Non usare librerie vecchie.
+
+        CONFINE INVALICABILE — NON RIPRODURRE IL BACKEND:
+        Il codice backend per questo file È GIÀ STATO SCRITTO dal tuo collega e ti
+        viene fornito come contesto. Il tuo compito è CONSUMARLO via HTTP, non
+        riscriverlo. In particolare NON devi mai emettere:
+        - Controller, Service, Repository, DbContext, entità di dominio, DTO lato
+          server, migrazioni, middleware o unit test del backend;
+        - file sotto src/backend/ (i tuoi percorsi iniziano SEMPRE con src/frontend/).
+        Se ti serve una struttura dati che il backend già espone, definisci al più
+        un modello di sola vista lato client e mappalo dalla risposta JSON: non
+        ricopiare la classe del server.
+        Riferisciti agli endpoint del backend per URL e forma del payload, senza
+        ridefinirne l'implementazione.
+"""
+        nota_output_frontend = ""
+
     backend_task = Task(
         description=f"""
         Sei un Senior Backend Developer. Il tuo obiettivo NON È TRADURRE il codice riga per riga.
@@ -657,7 +798,7 @@ def get_iterative_implementation_tasks(
         FILE LEGACY DA ANALIZZARE ({nome_file_legacy}):
         {safe_legacy}
 
-        Ignora completamente la UI, i bottoni o le finestre. Crea solo Endpoint REST (Controller) e Classi di Servizio.
+        {perimetro_backend}
 {blocco_tipi_esistenti}
         FORMATO DI OUTPUT OBBLIGATORIO (ripetibile per ogni file generato):
         /// FILEPATH: src/backend/...
@@ -711,34 +852,7 @@ def get_iterative_implementation_tasks(
         FILE LEGACY ORIGINALE (per capire l'intento della UX):
         {safe_legacy}
 
-        ENDPOINT: LEGGILI, NON DEDURLI.
-        Il codice backend ti viene fornito come contesto: prima di scrivere una
-        sola chiamata HTTP, ESTRAI dai controller le rotte reali — l'attributo
-        di routing della classe piu' quello di ogni metodo — e i tipi esatti che
-        restituiscono. Usa quelli alla lettera.
-        NON inventare endpoint "logici" che ti sembrano piu' comodi: se il
-        backend espone due rotte separate non chiamarne una aggregata che non
-        esiste, e se restituisce un oggetto singolo non aspettarti una lista.
-        Una chiamata a una rotta inesistente compila ma fallisce a runtime con
-        404, e nessuno se ne accorge finche' un utente non apre quella pagina.
-        Se ti serve un'aggregazione che il backend non fornisce, componila nel
-        frontend con piu' chiamate alle rotte che esistono davvero.
-
-        Non usare librerie vecchie.
-
-        CONFINE INVALICABILE — NON RIPRODURRE IL BACKEND:
-        Il codice backend per questo file È GIÀ STATO SCRITTO dal tuo collega e ti
-        viene fornito come contesto. Il tuo compito è CONSUMARLO via HTTP, non
-        riscriverlo. In particolare NON devi mai emettere:
-        - Controller, Service, Repository, DbContext, entità di dominio, DTO lato
-          server, migrazioni, middleware o unit test del backend;
-        - file sotto src/backend/ (i tuoi percorsi iniziano SEMPRE con src/frontend/).
-        Se ti serve una struttura dati che il backend già espone, definisci al più
-        un modello di sola vista lato client e mappalo dalla risposta JSON: non
-        ricopiare la classe del server.
-        Riferisciti agli endpoint del backend per URL e forma del payload, senza
-        ridefinirne l'implementazione.
-{blocco_tipi_esistenti}
+{perimetro_frontend}{blocco_tipi_esistenti}
         FORMATO DI OUTPUT OBBLIGATORIO (ripetibile per ogni file generato):
         /// FILEPATH: src/frontend/...
         ```
@@ -758,6 +872,7 @@ def get_iterative_implementation_tasks(
             "logica, file di progetto, classi di utility), NON inventare una UI: "
             "dichiara in una riga che il file non ha componenti di interfaccia "
             "e concludi."
+            + nota_output_frontend
         ),
         agent=agents["frontend_developer"],
         context=[backend_task],

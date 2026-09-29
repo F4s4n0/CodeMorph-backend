@@ -339,6 +339,54 @@ QA_MAX_PARTI = 12
 # dipendere da quanti file si migrano.
 MAX_PROGETTI_ATTESI = 6
 
+# --- Profili architetturali del target -----------------------------------
+# La pipeline nasce per un target WEB a strati: un backend che espone endpoint
+# e un'interfaccia separata che lo consuma via HTTP. Non e' l'unico target
+# sensato: per un gestionale desktop (tipicamente un sistema Visual FoxPro)
+# la naturale evoluzione e' un'applicazione desktop, dove le finestre invocano
+# i servizi nello stesso processo e non esistono ne' endpoint ne' trasporto.
+#
+# Il PROFILO e' la famiglia architetturale del target, indipendente dal
+# linguaggio: decide la struttura della solution (Fase 2 e primo file della
+# Fase 3) e il perimetro dei due sviluppatori (Fase 3). Per aggiungere una
+# famiglia nuova (mobile, batch...) si aggiunge una voce qui e i relativi
+# testi, senza toccare il resto della pipeline.
+PROFILO_WEB = "web"
+PROFILO_DESKTOP = "desktop"
+PROFILO_PREDEFINITO = PROFILO_WEB
+
+# Parole che, trovate nello stack scelto dal cliente, identificano il profilo.
+# Il match e' sul testo libero perche' lo stack puo' essere personalizzato:
+# "Java Swing + PostgreSQL" deve finire nel desktop quanto "C# WinForms".
+# Uno stack che non contiene nessuno di questi indizi resta WEB, cioe' il
+# comportamento storico della piattaforma.
+INDIZI_PROFILO = {
+    PROFILO_DESKTOP: (
+        "desktop",
+        "winforms", "windows forms",
+        "wpf", "maui", "avalonia", "winui",
+        "javafx", "swing",
+        "pyqt", "pyside", "tkinter",
+        "vcl", "firemonkey",
+    ),
+}
+
+
+def profilo_architettura(linguaggio_target):
+    """
+    Famiglia architetturale dello stack scelto dal cliente.
+
+    Serve a tutta la pipeline per non dare istruzioni che contraddicono
+    l'architettura scelta: a un target desktop non si puo' chiedere di
+    "creare solo endpoint REST".
+    """
+    testo = str(linguaggio_target or "").lower()
+    for profilo, indizi in INDIZI_PROFILO.items():
+        if any(indizio in testo for indizio in indizi):
+            return profilo
+    return PROFILO_PREDEFINITO
+
+
 # --- Struttura della solution, decisa in FASE 2 e approvata dal cliente ---
 # Nasce da un difetto reale: la Fase 3 migra un file per volta e ogni passata
 # inventava la propria architettura. Su un applicativo da 129 file sono nati
@@ -373,3 +421,46 @@ STRUTTURA_SOLUTION_RULES = (
     "- Contoso.Shared - Contratti e DTO condivisi fra i progetti\n"
     "- Contoso.Tests - Test unitari e di integrazione\n"
 )
+
+# Stessa sezione obbligatoria e stesso formato del profilo web — il parser in
+# crew.py (_progetti_dal_migration_plan) legge l'elenco allo stesso modo —
+# ma strati diversi, perche' in un desktop non c'e' nulla da esporre via rete.
+STRUTTURA_SOLUTION_RULES_DESKTOP = (
+    "\n\nSTRUTTURA DELLA SOLUTION (SEZIONE OBBLIGATORIA DEL DOCUMENTO):\n"
+    "Includi una sezione con questa intestazione ESATTA:\n"
+    "### STRUTTURA SOLUTION\n"
+    "seguita da un elenco puntato con un progetto per riga, nella forma\n"
+    "`- Nome.Progetto` seguito da un trattino e una riga di descrizione.\n"
+    "\n"
+    "REGOLE (target DESKTOP: interfaccia e logica girano nello stesso processo):\n"
+    f"- MASSIMO {MAX_PROGETTI_ATTESI} progetti in tutto.\n"
+    "- Dividi per STRATO, non per funzionalita': App (finestre, controlli e \n"
+    "  logica di interazione), Core (regole di business e servizi \n"
+    "  applicativi), Data (accesso al database e ai sistemi esterni), piu' un \n"
+    "  progetto di test.\n"
+    "- NIENTE progetto Api e NIENTE progetto di DTO condivisi: le finestre \n"
+    "  invocano i servizi direttamente, in-process. Non esiste un trasporto \n"
+    "  HTTP e non serve un contratto serializzabile fra interfaccia e logica.\n"
+    "- Le aree funzionali del legacy (magazzino, personale, contabilita'...) \n"
+    "  diventano CARTELLE dentro questi progetti, MAI progetti separati: il \n"
+    "  numero di progetti non deve dipendere da quanti file si migrano.\n"
+    "- Una sola convenzione di separatori: usa il punto, mai l'underscore.\n"
+    "- Nomi definitivi: saranno usati alla lettera nella generazione del codice.\n"
+    "\n"
+    "Esempio di formato atteso:\n"
+    "### STRUTTURA SOLUTION\n"
+    "- Contoso.App - Finestre e logica di interazione con l'utente\n"
+    "- Contoso.Core - Regole di business e servizi applicativi\n"
+    "- Contoso.Data - Accesso al database e ai sistemi esterni\n"
+    "- Contoso.Tests - Test unitari\n"
+)
+
+_STRUTTURA_PER_PROFILO = {
+    PROFILO_WEB: STRUTTURA_SOLUTION_RULES,
+    PROFILO_DESKTOP: STRUTTURA_SOLUTION_RULES_DESKTOP,
+}
+
+
+def struttura_solution_rules(profilo=PROFILO_PREDEFINITO):
+    """Regole della sezione '### STRUTTURA SOLUTION' per il profilo dato."""
+    return _STRUTTURA_PER_PROFILO.get(profilo, STRUTTURA_SOLUTION_RULES)

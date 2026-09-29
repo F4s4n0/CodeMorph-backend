@@ -230,16 +230,20 @@ def _sblocca_sessioni_orfane():
 # (pagina ricaricata, sessione ripresa altrove) si leggono dalla sessione su
 # database. Con un default fisso le fasi 2 e 3 giravano su Anthropic anche
 # quando il cliente aveva scelto Google, e se le vedeva fatturare come tali.
+# Lo stesso vale per lo stack target: una pagina ricaricata al Check Point 2
+# ripresenta il menu sul valore predefinito, e mandarlo cosi' com'e' faceva
+# girare la Fase 3 su un'architettura diversa da quella approvata.
+# Vedi _target_della_sessione per le regole, diverse fra Fase 2 e Fase 3.
 class InputFase2(BaseModel):
     session_id: str
-    linguaggio_target: str
+    linguaggio_target: str = ""
     provider_llm: str = ""
     modello_llm: str = ""
     quality_gate: bool = False
 
 class InputFase3(BaseModel):
     session_id: str
-    linguaggio_target: str
+    linguaggio_target: str = ""
     provider_llm: str = ""
     modello_llm: str = ""
     quality_gate: bool = False
@@ -1008,12 +1012,13 @@ def fase2_design(
 
     provider_sessione, modello_sessione = _modello_della_sessione(
         session_id, richiesta.provider_llm, richiesta.modello_llm)
+    target_sessione = _target_della_sessione(session_id, richiesta.linguaggio_target, fase=2)
 
     _imposta_stato_esecuzione(session_id, "running", fase="fase2")
     background_tasks.add_task(
         _lavoro_fase2, session_id, user_id,
         provider_sessione, modello_sessione,
-        richiesta.linguaggio_target, richiesta.quality_gate,
+        target_sessione, richiesta.quality_gate,
     )
     return {"status": "avviata", "session_id": session_id}
 
@@ -1176,12 +1181,13 @@ def fase3_implement(
 
     provider_sessione, modello_sessione = _modello_della_sessione(
         session_id, richiesta.provider_llm, richiesta.modello_llm)
+    target_sessione = _target_della_sessione(session_id, richiesta.linguaggio_target, fase=3)
 
     _imposta_stato_esecuzione(session_id, "running", fase="fase3")
     background_tasks.add_task(
         _lavoro_fase3, session_id, user_id,
         provider_sessione, modello_sessione,
-        richiesta.linguaggio_target, richiesta.quality_gate,
+        target_sessione, richiesta.quality_gate,
     )
     return {"status": "avviata", "session_id": session_id}
 
@@ -1225,6 +1231,58 @@ def _modello_della_sessione(session_id, provider_richiesto, modello_richiesto):
         logger.warning("Sessione %s senza modello noto: uso il predefinito %s / %s.",
                        session_id, provider, modello)
     return provider, modello
+
+
+def _target_della_sessione(session_id, target_richiesto, fase):
+    """
+    Stack tecnologico target per la fase, con regole diverse da quelle del
+    modello LLM perche' diverso e' il loro ruolo.
+
+    Il modello si puo' cambiare fra una fase e l'altra senza conseguenze. Lo
+    stack no: al Check Point 2 il cliente approva un'architettura progettata
+    PER quello stack (ADR, struttura della solution, schema). Da li' in poi il
+    target e' parte dell'architettura approvata, non un'impostazione.
+
+    - Fase 2: vince la richiesta, perche' e' qui che il cliente sceglie. Se
+      manca, si usa quello salvato in sessione.
+    - Fase 3: vince quello salvato a fine Fase 2. Una richiesta diversa viene
+      ignorata e segnalata nel log: di norma e' il menu tornato al valore
+      predefinito dopo un ricaricamento, e seguirla produrrebbe codice per
+      un'architettura che nessuno ha progettato. Per cambiare stack si rifa'
+      la Fase 2, che a fine lavoro aggiorna il valore in sessione.
+    """
+    richiesto = (target_richiesto or "").strip()
+
+    salvato = ""
+    try:
+        r = (supabase.table("migration_sessions").select("linguaggio_target")
+             .eq("id", session_id).limit(1).execute())
+        if r.data:
+            salvato = (r.data[0].get("linguaggio_target") or "").strip()
+    except Exception as e:
+        logger.warning("Stack target della sessione %s non leggibile: %s", session_id, e)
+
+    if fase == 3 and salvato:
+        if richiesto and richiesto != salvato:
+            logger.warning("Sessione %s: target richiesto '%s' ignorato, uso quello "
+                           "approvato in Fase 2 '%s'.", session_id, richiesto, salvato)
+            log_message(
+                session_id,
+                f"⚠️ Stack richiesto '{richiesto}' diverso da quello dell'architettura "
+                f"approvata al Check Point 2: uso '{salvato}'. Per cambiare stack "
+                "va ripetuta la Fase 2.",
+            )
+        return salvato
+
+    target = richiesto or salvato
+    if not target:
+        raise HTTPException(
+            status_code=400,
+            detail="Stack tecnologico target non specificato: sceglilo prima di avviare la fase.",
+        )
+    if not richiesto:
+        logger.info("Sessione %s: stack target recuperato dal database (%s).", session_id, target)
+    return target
 
 
 def _nome_file_zip(session_id, etichetta_fase):

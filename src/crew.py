@@ -27,6 +27,7 @@ from src.config import (
     QA_MAX_CHUNK_ATTESI,
     QA_MAX_PARTI,
     MAX_PROGETTI_ATTESI,
+    profilo_architettura,
     FILE_VALIDATION_FASE1,
     FILE_VALIDATION_FASE2,
     FILE_VALIDATION_FASE3,
@@ -963,8 +964,19 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
     # centinaia di file richiede piu' decisioni architetturali di uno da
     # quattro, e con un tetto fisso i due documenti uscivano lunghi uguale.
     numero_file = contesto_sorgenti.count("----- FILE:")
+    # Il target serve a get_design_tasks per scegliere in Python il PROFILO
+    # architetturale (web, desktop...): senza, le regole di struttura della
+    # solution restavano quelle web qualunque stack avesse scelto il cliente.
     tasks = get_design_tasks(agents, output_dir, contesto_fase1=contesto_fase1,
-                             numero_file=numero_file)
+                             numero_file=numero_file,
+                             linguaggio_target=linguaggio_target)
+    # Reso visibile nel log: e' la stessa classe di difetto del modello LLM
+    # scelto dal cliente e poi non usato, e va verificabile a colpo d'occhio.
+    log_message(
+        session_id,
+        f"🏗️ Profilo architetturale: {profilo_architettura(linguaggio_target)} "
+        f"(stack richiesto: {linguaggio_target}).",
+    )
     annuncia_avvio, task_callback = crea_logger_attivita(
         session_id, tasks, etichetta="Fase 2 · Design"
     )
@@ -1103,7 +1115,8 @@ def run_implementation_phase(
 
     log_message(
         session_id,
-        f"⚙️ Fase 3: {totale} file legacy in coda di migrazione verso {linguaggio_target}.",
+        f"⚙️ Fase 3: {totale} file legacy in coda di migrazione verso {linguaggio_target} "
+        f"(profilo {profilo_architettura(linguaggio_target)}).",
     )
 
     # I file correlati vengono migrati vicini: senza, due moduli dello stesso
