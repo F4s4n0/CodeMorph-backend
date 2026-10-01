@@ -170,36 +170,66 @@ MAX_FILE_SIZE = 250 * 1024
 
 def extract_foxpro_scx_code(file_path):
     """
-    Estrae da una Form FoxPro (.scx) sia il CODICE (metodi) sia il LAYOUT
-    GRAFICO (proprietà). Cruciale per permettere all'IA di ricreare la UX
-    in tecnologie moderne.
+    Estrae da una Form FoxPro (.scx) il CODICE (metodi), le PROPRIETA' e la
+    STRUTTURA dei controlli.
+
+    La struttura e' il campo PARENT di ogni record: dice dentro cosa sta un
+    controllo. Senza, una form con una griglia arrivava agli agenti come sei
+    oggetti `Header1` e sette `Text1` indistinguibili, e in una form a schede
+    (Pageframe) non si sapeva su quale scheda stesse un campo. All'agente che
+    riprogetta l'interfaccia serve proprio questo: capire quali funzioni e
+    quali dati raggruppava la maschera originale, non dove stavano i pixel.
+
+    Per ogni oggetto si riporta quindi il percorso completo
+    (`Form1.Grid1.Column3.Header1`) e, se e' una classe personalizzata, il
+    controllo base da cui deriva e la libreria che la definisce.
     """
     try:
         table = DBF(file_path, ignore_missing_memofile=True, char_decode_errors='ignore')
         codice_form_estratto = []
 
         for record in table:
-            # I campi Memo possono arrivare come None o bytes: normalizziamo
-            # sempre a stringa prima di chiamare .strip().
-            metodi = str(record.get('METHODS') or record.get('methods') or "")
-            proprieta = str(record.get('PROPERTIES') or record.get('properties') or "")
+            def campo(nome):
+                # I campi possono arrivare come None o bytes, e il nome del
+                # campo in maiuscolo o minuscolo a seconda della versione.
+                return str(record.get(nome) or record.get(nome.lower()) or "").strip()
 
-            nome_oggetto = record.get('OBJNAME') or record.get('objname') or "OggettoSconosciuto"
-            classe_oggetto = record.get('CLASS') or record.get('class') or "ClasseSconosciuta"
+            metodi = campo('METHODS')
+            proprieta = campo('PROPERTIES')
+            nome_oggetto = campo('OBJNAME')
+            genitore = campo('PARENT')
+            classe_oggetto = campo('CLASS')
+            classe_base = campo('BASECLASS')
+            libreria = campo('CLASSLOC')
 
-            if metodi.strip() or proprieta.strip():
-                codice_form_estratto.append("\n==========================================")
-                codice_form_estratto.append(
-                    f"*** OGGETTO: {nome_oggetto} | CLASSE: {classe_oggetto} ***"
-                )
+            # Il record finale di ogni .scx non ha nome: contiene solo la
+            # tabella delle metriche dei caratteri usati ("Arial, 0, 9, 5, 15,
+            # ..."). Per un agente e' rumore. Se pero' un record senza nome
+            # avesse del codice, lo si tiene: meglio un'etichetta generica che
+            # perdere logica.
+            if not nome_oggetto and not metodi:
+                continue
+            if not (metodi or proprieta):
+                continue
 
-                if proprieta.strip():
-                    codice_form_estratto.append("--- PROPRIETA' UI (Layout & Bindings) ---")
-                    codice_form_estratto.append(proprieta.strip())
+            percorso = f"{genitore}.{nome_oggetto}" if genitore else (nome_oggetto or "OggettoSenzaNome")
+            descrizione_classe = classe_oggetto or classe_base or "ClasseSconosciuta"
+            if classe_base and classe_oggetto and classe_base.lower() != classe_oggetto.lower():
+                # Controllo personalizzato: il tipo di controllo vero e' la
+                # classe base, la libreria dice dove leggerne il comportamento.
+                descrizione_classe += f" (deriva da {classe_base}"
+                descrizione_classe += f", definita in {libreria})" if libreria else ")"
 
-                if metodi.strip():
-                    codice_form_estratto.append("--- METODI E CODICE SORGENTE ---")
-                    codice_form_estratto.append(metodi.strip())
+            codice_form_estratto.append("\n==========================================")
+            codice_form_estratto.append(f"*** OGGETTO: {percorso} | CLASSE: {descrizione_classe} ***")
+
+            if proprieta:
+                codice_form_estratto.append("--- PROPRIETA' UI (Layout & Bindings) ---")
+                codice_form_estratto.append(proprieta)
+
+            if metodi:
+                codice_form_estratto.append("--- METODI E CODICE SORGENTE ---")
+                codice_form_estratto.append(metodi)
 
         if codice_form_estratto:
             return "\n".join(codice_form_estratto)

@@ -49,6 +49,73 @@ def _nota_data():
         "analizzato, ometti il riferimento invece di stimarlo."
     )
 # =====================================================================
+# PROGETTAZIONE DELL'INTERFACCIA (Fase 3, valida per tutti i profili)
+# =====================================================================
+# L'interfaccia NON si copia dalla maschera legacy, ne' graficamente ne' nei
+# contenuti: si progetta da cio' che e' stato deciso nelle fasi precedenti e
+# approvato dal cliente. La maschera legacy resta come lista di controllo
+# delle funzioni da non perdere. Cosi' le correzioni che il cliente fa alle
+# user story al Check Point 1 arrivano fino alle schermate, invece di
+# fermarsi ai documenti.
+#
+# Il testo non contiene parentesi graffe: viene inserito in descrizioni che
+# CrewAI interpola, e una graffa verrebbe scambiata per una variabile.
+_PROGETTAZIONE_INTERFACCIA = """
+        COME SI PROGETTA L'INTERFACCIA — NON COPIARE LA MASCHERA LEGACY:
+        La nuova interfaccia NON e' una riproduzione di quella originale, ne'
+        nell'aspetto ne' nei contenuti. Si progetta da cio' che e' stato deciso
+        e approvato nelle fasi precedenti. Le fonti, in ordine di autorita':
+
+        1. USER STORY E CRITERI DI ACCETTAZIONE (requisiti funzionali sopra):
+           decidono quali azioni l'utente puo' compiere, quali validazioni si
+           applicano e quali messaggi vede. Ogni story che riguarda questa
+           schermata deve trovare qui il suo controllo.
+        2. SERVIZI SCRITTI DAL TUO COLLEGA (codice che ricevi come contesto):
+           decidono quali operazioni esistono. Ogni pulsante chiama un metodo
+           che c'e' davvero, con il suo nome esatto.
+        3. ENTITA' E MODELLI DATI DEL NUOVO SISTEMA (nel codice del collega):
+           decidono quali campi mostrare e come si chiamano. Il tipo di
+           controllo discende dal tipo di dato: data -> selettore di data,
+           vero o falso -> casella di spunta, codice che rimanda a un'altra
+           tabella -> elenco a discesa con la descrizione leggibile, numero ->
+           campo numerico, testo lungo -> area di testo. Lunghezze massime e
+           campi obbligatori vengono dal modello, non dalla maschera vecchia.
+        4. MASCHERA LEGACY (file originale): SOLO come lista di controllo.
+           Serve a verificare che nessuna funzione vada persa e a riusare le
+           parole che gli utenti conoscono nelle etichette. Il percorso degli
+           oggetti (es. Form1.Grid1.Column3.Header1, frmX.pgf.Page2.txtNome)
+           dice cosa stava dentro cosa: usalo per capire quali funzioni e
+           quali dati la maschera raggruppava, NON per copiarne le coordinate.
+
+        DISALLINEAMENTI FRA VECCHIO E NUOVO — gestiscili cosi':
+        - Campo della maschera legacy ASSENTE nel nuovo modello dati: non
+          inventarlo. Lascia nel codice della schermata un commento che
+          inizia con LEGACY-NON-MIGRATO seguito dal nome del campo, perche'
+          il cliente lo verifichi in revisione.
+        - Campo NUOVO richiesto da una user story ma assente nella maschera
+          legacy: aggiungilo.
+        - Logica che nella maschera legacy stava negli eventi (query SQL nel
+          caricamento, ricerche su indice, calcoli): non riscriverla nella
+          schermata. Chiama il servizio che la implementa.
+
+        COMPLETEZZA — nessuna funzione persa:
+        Ogni azione possibile nella maschera legacy deve restare possibile
+        nella nuova: con un pulsante, una voce di menu o una scorciatoia. Puoi
+        togliere solo elementi puramente decorativi (riquadri, linee, immagini
+        di sfondo); se togli qualcos'altro, scrivi il motivo in un commento.
+
+        ASPETTO — moderno, non d'epoca:
+        Raggruppa i controlli per funzione (criteri di ricerca, risultati,
+        dettaglio, azioni) invece di disporli come nell'originale. La
+        schermata deve adattarsi alle dimensioni della finestra. Usa colori,
+        caratteri e spaziature attuali: non riprodurre i colori dell'epoca
+        legacy. Metti le azioni dove l'utente se le aspetta, con la conferma e
+        l'annullamento in basso a destra collegati ai tasti Invio ed Esc, e
+        un ordine di tabulazione che segua l'ordine di compilazione.
+"""
+
+
+# =====================================================================
 # FASE 1 - UNDERSTANDING
 # =====================================================================
 
@@ -700,12 +767,23 @@ def get_iterative_implementation_tasks(
             "piattaforma e non implica un server."
         )
         perimetro_frontend = """\
-        COME SI TRADUCE UNA MASCHERA LEGACY (applicazione desktop):
-        La maschera legacy diventa una finestra del framework desktop scelto
-        (Form in WinForms, Window in WPF, Stage in JavaFX, e cosi' via). Non
-        riscriverne la logica di business: e' gia' nei servizi generati dal
-        tuo collega, che ti vengono forniti come contesto. La finestra dispone
-        i controlli, li lega ai dati e reagisce agli eventi dell'utente.
+        COME SI REALIZZA LA SCHERMATA (applicazione desktop):
+        Ogni schermata e' una finestra del framework desktop scelto (Form in
+        WinForms, Window in WPF, Stage in JavaFX, e cosi' via). La logica di
+        business NON sta qui: e' gia' nei servizi generati dal tuo collega.
+        La finestra dispone i controlli, li lega ai dati e reagisce agli
+        eventi dell'utente.
+
+        LA FINESTRA DEVE ESSERE DISEGNATA, NON SOLO CODIFICATA:
+        Produci il file di definizione grafica che il framework usa per il suo
+        designer visuale — il file Designer in WinForms, lo XAML in WPF, WinUI,
+        MAUI e Avalonia, l'FXML in JavaFX, il .ui in Qt, il .dfm in Delphi —
+        insieme al file di codice con i gestori di evento. Chi apre il
+        progetto deve vedere la finestra disegnata nel designer, non una
+        classe che crea i controlli a runtime senza anteprima.
+        Per la disposizione usa i contenitori di layout del framework
+        (pannelli a griglia, a flusso, ancoraggi), non coordinate fisse
+        copiate dalla maschera legacy.
 
         SERVIZI: CHIAMALI, NON DEDURLI.
         Prima di scrivere una chiamata, ESTRAI dal codice del tuo collega i
@@ -716,27 +794,21 @@ def get_iterative_implementation_tasks(
         dall'esterno (costruttore o meccanismo di iniezione del framework)
         invece di istanziarlo dentro i gestori di evento.
 
-        FEDELTA' ALLA MASCHERA ORIGINALE:
-        Ricalca la disposizione dei controlli dell'originale, i testi delle
-        etichette e l'ordine di tabulazione: gli utenti di un gestionale
-        conoscono quelle maschere a memoria e riconoscono i campi dalla
-        posizione. Dove il legacy usa una griglia legata a un cursore o a una
-        tabella, usa il controllo griglia del framework legato alla
-        collezione restituita dal servizio.
-
         CONFINE INVALICABILE — NON RIPRODURRE LA LOGICA:
         NON emettere entita' di dominio, servizi, repository, accesso al
         database o query: sono gia' stati scritti dal tuo collega. Se ti serve
         una struttura dati che esiste gia', RIUSALA importandola.
         I percorsi restano sotto src/frontend/: e' una convenzione della
         piattaforma e non implica un'applicazione web.
-"""
+""" + _PROGETTAZIONE_INTERFACCIA
         nota_output_frontend = (
-            " Nel profilo desktop l'interfaccia e' una finestra: per ogni "
-            "maschera legacy produci il file della finestra — oppure la coppia "
-            "markup piu' code-behind, se il framework la prevede — con i "
-            "controlli e i gestori di evento. Niente client HTTP ne' modelli "
-            "di trasporto."
+            " Nel profilo desktop ogni schermata e' una finestra composta da "
+            "DUE file: la definizione grafica per il designer visuale del "
+            "framework e il codice con i gestori di evento. Una finestra senza "
+            "il file grafico e' incompleta. Niente client HTTP ne' modelli "
+            "di trasporto. Ogni funzione della maschera legacy deve restare "
+            "raggiungibile; i campi legacy non presenti nel nuovo modello vanno "
+            "segnalati con un commento LEGACY-NON-MIGRATO."
         )
     else:
         perimetro_backend = (
@@ -771,8 +843,12 @@ def get_iterative_implementation_tasks(
         ricopiare la classe del server.
         Riferisciti agli endpoint del backend per URL e forma del payload, senza
         ridefinirne l'implementazione.
-"""
-        nota_output_frontend = ""
+""" + _PROGETTAZIONE_INTERFACCIA
+        nota_output_frontend = (
+            " Ogni funzione della maschera legacy deve restare raggiungibile; "
+            "i campi legacy non presenti nel nuovo modello vanno segnalati con "
+            "un commento LEGACY-NON-MIGRATO."
+        )
 
     backend_task = Task(
         description=f"""
