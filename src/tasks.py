@@ -1028,6 +1028,55 @@ def get_quality_check_task(
     
     intestazione_chunk = f" ({chunk_label})" if chunk_label else ""
 
+    # I tre controlli "di insieme" (interfacce senza implementazione, tipi
+    # duplicati, riferimenti inesistenti) si possono dare per certi solo
+    # quando il revisore vede TUTTO il codice. Quando il codice e' diviso in
+    # parti, ciascuna viene revisionata da sola: l'implementazione di
+    # un'interfaccia puo' stare in un'altra parte, e chiedere di segnalarla
+    # come BLOCCANTE produceva difetti gravi che non esistono. In quel caso
+    # il rilievo resta, ma come punto da verificare sul progetto completo.
+    # (Le interfacce orfane sono comunque verificate in modo deterministico
+    # su tutto il codice da crew.py, in coda al report.)
+    if chunk_label:
+        controlli_di_insieme = (
+            "ATTENZIONE — STAI VEDENDO SOLO UNA PARTE DEL CODICE "
+            f"({chunk_label}). Il codice generato e' stato diviso in parti "
+            "per dimensione, e ogni parte viene revisionata separatamente: "
+            "le altre parti NON ti vengono mostrate. La divisione cade su una "
+            "riga qualsiasi, quindi la parte puo' iniziare o finire a meta' di "
+            "un file o di una classe: NON e' un difetto del codice, non "
+            "segnalarlo come troncamento, sintassi incompleta o codice non "
+            "compilabile.\n"
+            "Per lo stesso motivo, i difetti seguenti NON li puoi accertare "
+            "da qui, perche' il pezzo che ti sembra mancare puo' trovarsi in "
+            "un'altra parte:\n"
+            "- interfacce di cui non vedi la classe che le implementa;\n"
+            "- tipi che ti sembrano definiti piu' volte, o definiti altrove;\n"
+            "- riferimenti a classi, servizi o namespace che non compaiono "
+            "in questa parte.\n"
+            "Se ne incontri, riportali in una sezione separata intitolata "
+            "'Da verificare sul progetto completo', indicando il nome esatto "
+            "del tipo e dove lo hai visto usato. NON classificarli come "
+            "BLOCCANTI, non assegnare loro gravita' alta e NON usarli per "
+            "motivare un verdetto RESPINTO: da soli non provano nulla. "
+            "Classifica come bloccante solo cio' che e' dimostrabile con il "
+            "codice che hai davanti (ad esempio due definizioni dello stesso "
+            "tipo entrambe visibili in questa parte).\n\n"
+        )
+    else:
+        controlli_di_insieme = (
+            "CONTROLLA IN PARTICOLARE I DIFETTI CHE IMPEDISCONO L'AVVIO:\n"
+            "- interfacce dichiarate senza alcuna classe che le implementi: "
+            "registrate nella dependency injection, bloccano l'applicazione "
+            "all'avvio e non in compilazione, quindi passano inosservate;\n"
+            "- tipi definiti piu' volte con lo stesso nome in file diversi;\n"
+            "- riferimenti a classi, servizi o namespace che non compaiono in "
+            "nessuna parte del codice generato.\n"
+            "Sono difetti piu' gravi di una vulnerabilita' teorica: rendono il "
+            "progetto inutilizzabile finche' non vengono risolti, e vanno "
+            "segnalati come BLOCCANTI.\n\n"
+        )
+
     quality_check_task = Task(
         description=(
             f"Analizza accuratamente il seguente codice sorgente generato{intestazione_chunk} "
@@ -1040,26 +1089,13 @@ def get_quality_check_task(
             "lacune evidenti nella copertura dei test (quali comportamenti restano "
             "senza test). Indica chiaramente se il codice è approvabile per la "
             "produzione o quali correzioni sono bloccanti.\n\n"
-            "CONTROLLA IN PARTICOLARE I DIFETTI CHE IMPEDISCONO L'AVVIO:\n"
-            "- interfacce dichiarate senza alcuna classe che le implementi: "
-            "registrate nella dependency injection, bloccano l'applicazione "
-            "all'avvio e non in compilazione, quindi passano inosservate;\n"
-            "- tipi definiti piu' volte con lo stesso nome in file diversi;\n"
-            "- riferimenti a classi, servizi o namespace che non compaiono in "
-            "nessuna parte del codice generato.\n"
-            "Sono difetti piu' gravi di una vulnerabilita' teorica: rendono il "
-            "progetto inutilizzabile finche' non vengono risolti, e vanno "
-            "segnalati come BLOCCANTI.\n\n"
-            "VINCOLO OBBLIGATORIO: non riportare MAI metriche numeriche che "
+            + controlli_di_insieme
+            + "VINCOLO OBBLIGATORIO: non riportare MAI metriche numeriche che "
             "richiederebbero l'esecuzione di strumenti (percentuali di code coverage, "
             "complessità ciclomatica misurata, punteggi o rating SonarQube). "
             "Sono dati che non puoi misurare leggendo il codice: riportarli sarebbe "
             "un'informazione falsa. Limitati a rilievi qualitativi verificabili, "
             "citando file, funzione o riga."
-            "NOTA SUGLI ESTRATTI: i documenti molto lunghi ti vengono forniti "
-            "parzialmente, con un marcatore esplicito nel punto di interruzione. "
-            "Un estratto interrotto NON è un difetto del documento: non segnalarlo "
-            "come troncamento e non bocciare per questo motivo."
         )+ _nota_data(),
         expected_output=(
             "Un report di 'Quality Check' in Markdown con: sintesi della revisione, "
@@ -1067,6 +1103,13 @@ def get_quality_check_task(
             "alta/media/bassa), lacune di test individuate e verdetto finale "
             "(APPROVATO / APPROVATO CON RISERVE / RESPINTO) con le motivazioni. "
             "Nessuna percentuale di copertura né punteggio numerico."
+            + (
+                " Poiche' stai revisionando solo una parte del codice, il "
+                "verdetto vale per questa parte; aggiungi in coda la sezione "
+                "'Da verificare sul progetto completo' se hai rilievi che "
+                "dipendono dal codice che non vedi (omettila se non ne hai)."
+                if chunk_label else ""
+            )
         ),
         agent=agents["security_quality_reviewer"],
         output_file=f"{output_dir}/{output_filename}",
