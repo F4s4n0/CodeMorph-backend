@@ -471,9 +471,47 @@ def _normalizza_mermaid(testo):
             n2 += etichetta.count("&")
             return etichetta.replace("&", "e")
 
+        # 3. Etichette degli ARCHI con caratteri speciali e senza virgolette:
+        #    `A -->|HTTP GET (Status 200)| B` e' un errore di parsing, perche'
+        #    la parentesi viene letta come inizio di un nodo. E' il difetto
+        #    piu' frequente: i modelli mettono fra virgolette le etichette dei
+        #    nodi ma non quelle delle frecce. Fra virgolette e' sempre valida.
+        #    Vale solo nei diagrammi di flusso (graph/flowchart): negli altri
+        #    tipi la barra verticale ha un altro significato.
+        n3 = 0
+        if re.match(r"\s*(?:graph|flowchart)\b", corpo):
+            def _serve_virgolette(etichetta):
+                return re.search(r"[^\w\s.,'/\-]", etichetta) is not None
+
+            def _arco_con_barre(match):
+                nonlocal n3
+                etichetta = match.group(2).strip()
+                if not etichetta or not _serve_virgolette(etichetta):
+                    return match.group(0)
+                n3 += 1
+                return f'{match.group(1)}|"{etichetta}"|'
+
+            # forma  A -->|testo| B   (anche -.->  ==>  ---  --o  --x)
+            corpo = re.sub(
+                r'((?:-{2,}|={2,}|-\.+-)[>ox]?[ \t]*)\|([^|"\n]+)\|',
+                _arco_con_barre, corpo)
+
+            def _arco_in_linea(match):
+                nonlocal n3
+                etichetta = match.group(2).strip()
+                if not etichetta or not _serve_virgolette(etichetta):
+                    return match.group(0)
+                n3 += 1
+                return f'{match.group(1)} "{etichetta}" {match.group(3)}'
+
+            # forma  A -- testo --> B   e   A == testo ==> B
+            corpo = re.sub(
+                r'(?m)(^[ \t]*[A-Za-z0-9_]+[ \t]*(?:--|==))[ \t]+([^"|\n>]*?[^"|\n>\-=\s])[ \t]+((?:--+|==+)[>ox])',
+                _arco_in_linea, corpo)
+
         corpo = re.sub(r'"[^"\n]*"', _senza_ampersand, corpo)
 
-        conteggio += n1 + n2
+        conteggio += n1 + n2 + n3
         return m.group(1) + corpo + m.group(3)
 
     risultato = re.sub(r'(```mermaid\n)(.*?)(```)', _corpo, testo, flags=re.DOTALL)
