@@ -27,7 +27,7 @@ from auth import _parse_expiry, get_current_user, get_current_user_and_validate_
 from payments import addebita_consumo_token, addebita_importo_token, verifica_credito_token
 from payments import router as payments_router
 from src.code_unpacker import unpack_markdown_to_files
-from src.config import FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_SELEZIONE, MODELLO_PREDEFINITO, WORKSPACE_DIR
+from src.config import FILE_BACKEND_IMPL, FILE_COMPOSITION, FILE_FRONTEND_IMPL, FILE_SELEZIONE, MODELLO_PREDEFINITO, WORKSPACE_DIR
 from src.crew import run_understanding_phase, run_design_phase, run_implementation_phase
 from src.graph_builder import (
     ESTENSIONI_VALIDE,
@@ -1054,6 +1054,10 @@ def _lavoro_fase3(session_id, user_id, provider_llm, modello_llm,
         log_message(session_id, "🗜️ Sconfezionamento del codice generato in file fisici e ZIP finale...")
         n_backend = unpack_markdown_to_files(str(cartella_output / FILE_BACKEND_IMPL), str(cartella_output))
         n_frontend = unpack_markdown_to_files(str(cartella_output / FILE_FRONTEND_IMPL), str(cartella_output))
+        # La composizione va sconfezionata PER ULTIMA: il suo punto di avvio
+        # completo deve sostituire quello parziale scritto durante la migrazione.
+        # Se il documento non esiste (composizione saltata o fallita) ritorna 0.
+        n_composizione = unpack_markdown_to_files(str(cartella_output / FILE_COMPOSITION), str(cartella_output))
 
         percorso_zip = _crea_zip_fase(
             str(WORKSPACE_DIR / f"{session_id}_finale"), str(cartella_output),
@@ -1082,7 +1086,8 @@ def _lavoro_fase3(session_id, user_id, provider_llm, modello_llm,
                 "file_migrati": esiti["completati"],
                 "file_falliti": esiti["falliti"],
                 "file_saltati_da_checkpoint": esiti["saltati"],
-                "file_sorgente_estratti": {"backend": n_backend, "frontend": n_frontend},
+                "file_sorgente_estratti": {"backend": n_backend, "frontend": n_frontend,
+                                           "composizione": n_composizione},
                 "url_download": f"/api/v1/modernize/download/{session_id}/3",
             },
         )

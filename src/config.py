@@ -33,6 +33,7 @@ FILE_TEST_BOOK        = "4_Test_Book_Generation.md"
 FILE_MIGRATION_PLAN   = "5_Migration_Plan_ADR.md"
 FILE_BACKEND_IMPL     = "6a_Backend_Project_Implementation.md"
 FILE_FRONTEND_IMPL    = "6b_Frontend_Project_Implementation.md"
+FILE_COMPOSITION      = "6c_Solution_Composition.md"
 FILE_QUALITY_REPORT   = "7_Quality_Check_Report.md"
 FILE_VALIDATION_FASE1 = "8_Validation_Report_Fase1.md"
 FILE_VALIDATION_FASE2 = "9_Validation_Report_Fase2.md"
@@ -332,6 +333,21 @@ QA_MAX_CHUNK_ATTESI = 5
 # segnalazioni inaffidabili. Oltre questa soglia si analizza una porzione
 # rappresentativa e si DICHIARA nel report cosa e' rimasto fuori.
 QA_MAX_PARTI = 12
+
+# --- Composizione finale della soluzione (ultimo passo della Fase 3) ---
+# La Fase 3 migra un file legacy per volta: nessuna passata ha il compito di
+# scrivere i file che tengono insieme la soluzione (file di build, punto di
+# avvio completo, configurazione). Su un giro reale il codice dei singoli file
+# era corretto ma la soluzione non si apriva: mancavano i file di progetto e
+# nel punto di avvio era registrato un solo componente, con un commento che
+# rimandava il resto "ai file successivi".
+# L'agente di composizione NON riceve tutto il codice (costerebbe quanto
+# rimigrare il progetto): riceve un inventario con percorsi e dichiarazioni.
+COMPOSIZIONE_MAX_CHARS_INVENTARIO = 60_000   # tetto all'inventario nel prompt
+COMPOSIZIONE_MAX_RIGHE_PER_FILE = 14         # dichiarazioni riportate per file
+COMPOSIZIONE_MAX_IMPORT_PER_PROGETTO = 60    # librerie importate, per progetto
+COMPOSIZIONE_MAX_CHARS_AVVIO = 8_000         # testo completo dei file di avvio
+COMPOSIZIONE_MAX_CHARS_ADR = 20_000          # estratto dell'ADR
 
 # Numero massimo di PROGETTI attesi nella solution generata.
 # La Fase 3 migra un file legacy per volta e ogni passata tende a inventare
