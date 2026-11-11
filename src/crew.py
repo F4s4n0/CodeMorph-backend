@@ -21,6 +21,7 @@ from src.config import (
     FILE_MIGRATION_PLAN,
     FILE_BACKEND_IMPL,
     FILE_FRONTEND_IMPL,
+    FILE_COMPOSITION,
     FILE_IMPL_CHECKPOINT,
     FILE_QUALITY_REPORT,
     FILE_TEST_BOOK,
@@ -34,7 +35,12 @@ from src.config import (
     FILE_VALIDATION_FASE3,
     VALIDAZIONE_MAX_CHARS,
     DELAY_TRA_FILE_SEC,
-    VALIDAZIONE_MAX_CHARS_PER_DOC
+    VALIDAZIONE_MAX_CHARS_PER_DOC,
+    COMPOSIZIONE_MAX_CHARS_INVENTARIO,
+    COMPOSIZIONE_MAX_RIGHE_PER_FILE,
+    COMPOSIZIONE_MAX_IMPORT_PER_PROGETTO,
+    COMPOSIZIONE_MAX_CHARS_AVVIO,
+    COMPOSIZIONE_MAX_CHARS_ADR,
 )
 from src.graph_builder import raccogli_sorgenti
 from src.live_log import crea_logger_attivita, log_message
@@ -92,6 +98,7 @@ from src.tasks import (
     get_design_tasks,
     get_iterative_implementation_tasks,
     get_quality_check_task,
+    get_composition_task,
     get_validation_task,
 )
 
@@ -765,6 +772,311 @@ def _interfacce_senza_implementazione(codice):
     return sorted(dichiarate - implementate)
 
 
+# =====================================================================
+# COMPOSIZIONE FINALE DELLA SOLUZIONE
+# =====================================================================
+# Nomi (senza estensione) dei file che fanno da punto di avvio nei vari
+# stack: sono gli unici file gia' generati che il passo di composizione puo'
+# riscrivere.
+_NOMI_FILE_DI_AVVIO = {
+    "program", "main", "startup", "app", "application", "index",
+    "app.module", "__main__", "manage", "server",
+}
+
+_RE_DICHIARAZIONE = re.compile(
+    r"\b(namespace|package|module|class|interface|record|struct|enum|trait|"
+    r"def|func|function|constructor)\b"
+)
+_RE_IMPORT = re.compile(r"^\s*(using\s+[A-Za-z_]|import\s|from\s+\S+\s+import\s|#include\s)")
+_PREFISSI_COMMENTO = ("//", "/*", "*", '"' * 3, "'" * 3, "<!--", "# ")
+
+
+def _blocchi_generati(testo):
+    """
+    Estrae i file dichiarati in un documento di implementazione.
+
+    Ritorna {percorso: codice}, nell'ordine in cui compaiono. Segue le stesse
+    regole del code unpacker: se un percorso e' dichiarato piu' volte vale
+    l'ULTIMA versione, perche' e' quella che finira' su disco.
+    """
+    blocchi = {}
+    percorso, in_blocco, righe = None, False, []
+    for riga in (testo or "").splitlines():
+        pulita = riga.strip()
+        if pulita.startswith("/// FILEPATH:"):
+            if in_blocco and percorso and righe:
+                blocchi[percorso] = "\n".join(righe)
+            percorso = pulita[len("/// FILEPATH:"):].strip()
+            in_blocco, righe = False, []
+            continue
+        if percorso and pulita.startswith("```"):
+            if not in_blocco:
+                in_blocco = True
+            else:
+                blocchi[percorso] = "\n".join(righe)
+                percorso, in_blocco, righe = None, False, []
+            continue
+        if in_blocco and percorso:
+            righe.append(riga)
+    if in_blocco and percorso and righe:
+        blocchi[percorso] = "\n".join(righe)
+    return blocchi
+
+
+def _e_file_di_avvio(percorso):
+    """True se il file e' un punto di avvio (Program, main, app...)."""
+    nome = percorso.replace("\\", "/").rsplit("/", 1)[-1]
+    radice = nome.rsplit(".", 1)[0].lower() if "." in nome else nome.lower()
+    return radice in _NOMI_FILE_DI_AVVIO
+
+
+def _progetto_del_percorso(percorso):
+    """`src/backend/Fox.Core/Services/X.cs` -> `Fox.Core`; `(radice)` se assente."""
+    parti = [p for p in percorso.replace("\\", "/").split("/") if p]
+    while parti and parti[0].lower() in ("src", "tests", "test", "backend", "frontend"):
+        parti.pop(0)
+    return parti[0] if len(parti) > 1 else "(radice)"
+
+
+def _firme_del_file(codice, max_righe):
+    """
+    Righe di un file che servono a COLLEGARLO: spazio dei nomi, dichiarazioni
+    di tipo e costruttori. Il corpo dei metodi non serve a chi deve scrivere
+    file di build e punto di avvio, e costerebbe quanto rimigrare il progetto.
+    """
+    tipi = _tipi_dichiarati(codice)
+    re_costruttore = (
+        re.compile(r"^\s*(?:public|internal|protected)?\s*(?:%s)\s*\(" % "|".join(
+            re.escape(t) for t in sorted(tipi)))
+        if tipi else None
+    )
+    firme = []
+    for riga in codice.splitlines():
+        pulita = riga.strip()
+        if not pulita or pulita.startswith(_PREFISSI_COMMENTO):
+            continue
+        if _RE_DICHIARAZIONE.search(pulita) or (re_costruttore and re_costruttore.match(riga)):
+            firma = pulita.rstrip("{").rstrip()[:220]
+            if firma and firma not in firme:
+                firme.append(firma)
+            if len(firme) >= max_righe:
+                break
+    return firme
+
+
+def _inventario_per_composizione(blocchi, max_char):
+    """
+    Testo dell'inventario per l'agente di composizione.
+
+    Ritorna (testo, ridotto). Se l'inventario supera `max_char` si tolgono le
+    dichiarazioni prima ai file di test e poi agli ultimi file, lasciando
+    SEMPRE il percorso: un file di cui l'agente non conosce l'esistenza
+    resterebbe fuori dai file di build. `ridotto` dice al chiamante di
+    dichiararlo, invece di far credere che l'inventario sia completo.
+    """
+    def _e_test(percorso):
+        basso = percorso.lower()
+        return basso.startswith(("tests/", "test/")) or ".tests/" in basso
+
+    import_per_progetto = {}
+    for percorso, codice in blocchi.items():
+        visti = import_per_progetto.setdefault(_progetto_del_percorso(percorso), [])
+        for riga in codice.splitlines():
+            if _RE_IMPORT.match(riga):
+                voce = riga.strip().rstrip(";")
+                if voce not in visti and len(visti) < COMPOSIZIONE_MAX_IMPORT_PER_PROGETTO:
+                    visti.append(voce)
+
+    coda = "\n\nLIBRERIE IMPORTATE, PER PROGETTO:\n" + "\n".join(
+        f"- {progetto}: " + (" | ".join(voci) if voci else "(nessuna)")
+        for progetto, voci in sorted(import_per_progetto.items())
+    )
+
+    def _componi(con_firme):
+        righe = []
+        for percorso, codice in blocchi.items():
+            righe.append(f"- {percorso}")
+            if con_firme(percorso):
+                righe.extend(f"    {f}" for f in
+                             _firme_del_file(codice, COMPOSIZIONE_MAX_RIGHE_PER_FILE))
+        return "\n".join(righe) + coda
+
+    testo = _componi(lambda p: True)
+    if len(testo) <= max_char:
+        return testo, False
+
+    testo = _componi(lambda p: not _e_test(p))
+    if len(testo) <= max_char:
+        return testo, True
+
+    # Ancora troppo: firme solo finche' c'e' spazio, poi soli percorsi.
+    budget = max_char - len(coda) - sum(len(p) + 3 for p in blocchi)
+    righe = []
+    for percorso, codice in blocchi.items():
+        righe.append(f"- {percorso}")
+        if _e_test(percorso) or budget <= 0:
+            continue
+        firme = [f"    {f}" for f in _firme_del_file(codice, COMPOSIZIONE_MAX_RIGHE_PER_FILE)]
+        costo = sum(len(f) + 1 for f in firme)
+        if costo <= budget:
+            righe.extend(firme)
+            budget -= costo
+        else:
+            budget = 0
+    return "\n".join(righe) + coda, True
+
+
+def _testo_file_di_avvio(blocchi, max_char):
+    """Testo completo dei file di avvio gia' generati, entro `max_char`."""
+    pezzi, residuo = [], max_char
+    for percorso, codice in blocchi.items():
+        if not _e_file_di_avvio(percorso) or residuo <= 0:
+            continue
+        estratto = codice[:residuo]
+        if len(codice) > residuo:
+            estratto += "\n[...file troncato per dimensione...]"
+        pezzi.append(f"/// FILEPATH: {percorso}\n{estratto}")
+        residuo -= len(estratto)
+    return "\n\n".join(pezzi)
+
+
+def _componi_soluzione(llm, linguaggio_target, output_dir, contesto_adr,
+                       progetti, session_id=None, tracker=None):
+    """
+    Ultimo passo della Fase 3: genera i file che tengono insieme la soluzione
+    (file di build, punto di avvio completo, configurazione, istruzioni).
+
+    Scrive un documento A PARTE (FILE_COMPOSITION), che il chiamante
+    sconfeziona per ULTIMO: cosi' il punto di avvio completo sostituisce
+    quello parziale prodotto durante la migrazione, qualunque sia il documento
+    in cui quello si trova.
+
+    Ritorna "ok", "vuota" (nessun file utilizzabile) oppure "fallita".
+    Un fallimento NON invalida la fase: il codice migrato resta consegnabile,
+    e l'esito viene dichiarato nel log.
+    """
+    blocchi = _blocchi_generati(_read_if_exists(f"{output_dir}/{FILE_BACKEND_IMPL}", ""))
+    blocchi.update(_blocchi_generati(_read_if_exists(f"{output_dir}/{FILE_FRONTEND_IMPL}", "")))
+    if not blocchi:
+        log_message(session_id, "ℹ️ Composizione finale saltata: nessun file generato da collegare.")
+        return "vuota"
+
+    inventario, ridotto = _inventario_per_composizione(blocchi, COMPOSIZIONE_MAX_CHARS_INVENTARIO)
+    if ridotto:
+        log_message(
+            session_id,
+            f"ℹ️ Composizione finale: l'inventario dei {len(blocchi)} file generati "
+            "supera la dimensione gestibile ed e' stato abbreviato. I componenti "
+            "non collegati saranno elencati fra i 'Punti aperti' del README.",
+        )
+
+    # Agenti NUOVI, come per ogni file della fase: riusare quelli gia'
+    # impiegati falserebbe il conteggio dei token (vedi nota nel ciclo).
+    agents_comp = create_agents(llm)
+    tasks_comp = get_composition_task(
+        agents=agents_comp,
+        linguaggio_target=linguaggio_target,
+        inventario=inventario,
+        file_di_avvio=_testo_file_di_avvio(blocchi, COMPOSIZIONE_MAX_CHARS_AVVIO),
+        contesto_adr=_tronca_su_sezioni(contesto_adr, COMPOSIZIONE_MAX_CHARS_ADR),
+        progetti_esistenti=progetti,
+        inventario_ridotto=ridotto,
+    )
+    annuncia, callback = crea_logger_attivita(
+        session_id, tasks_comp, etichetta="Composizione finale della soluzione"
+    )
+
+    def step_con_stop(step):
+        interruzione.verifica_stop(session_id)   # solleva se richiesto
+
+    crew_comp = Crew(
+        agents=[agents_comp["senior_migration_developer"]],
+        tasks=tasks_comp,
+        process=Process.sequential,
+        verbose=False,
+        memory=False,
+        step_callback=step_con_stop,
+        task_callback=callback,
+    )
+
+    log_message(
+        session_id,
+        f"🧩 Composizione finale: collego i {len(blocchi)} file generati "
+        "(file di build, punto di avvio, configurazione)...",
+    )
+    try:
+        annuncia()
+        risultato = crew_comp.kickoff()
+    except interruzione.FaseInterrotta:
+        raise   # lo stop chiesto dall'utente non va mai assorbito
+    except Exception as e:
+        logger.exception("Composizione finale fallita.")
+        log_message(
+            session_id,
+            f"❌ Composizione finale fallita — {type(e).__name__}: {e}. Il codice "
+            "migrato resta disponibile, ma file di build e punto di avvio vanno "
+            "completati a mano.",
+        )
+        if tracker is not None:
+            # Anche il tentativo fallito ha consumato token.
+            tracker.aggiungi_crew(crew_comp)
+            _salva_consumo_parziale(session_id, tracker)
+        return "fallita"
+
+    if tracker is not None:
+        tracker.aggiungi_crew(crew_comp, risultato)
+        _salva_consumo_parziale(session_id, tracker)
+
+    output = _task_output_text(tasks_comp[0])
+    output, n_mascherati = maschera_segreti(output, valori_noti=_SEGRETI_SESSIONE)
+    if n_mascherati:
+        logger.info("Composizione finale: rimossi %d possibili segreti.", n_mascherati)
+
+    # Verifica DETERMINISTICA del vincolo dato nel prompt: la composizione puo'
+    # riscrivere solo i file di avvio. Un blocco che ripete il percorso di un
+    # altro file gia' migrato lo sovrascriverebbe con una versione scritta
+    # senza averne visto il codice.
+    prodotti = _blocchi_generati(output)
+    scartati = [p for p in prodotti if p in blocchi and not _e_file_di_avvio(p)]
+    for percorso in scartati:
+        del prodotti[percorso]
+    if scartati:
+        log_message(
+            session_id,
+            f"⚠️ Composizione finale: scartati {len(scartati)} file che avrebbero "
+            "sovrascritto codice gia' migrato: " + ", ".join(scartati[:3]),
+        )
+        logger.warning("Composizione: blocchi scartati -> %s", ", ".join(scartati))
+
+    if not prodotti:
+        log_message(
+            session_id,
+            "⚠️ Composizione finale: il modello non ha prodotto file utilizzabili. "
+            "File di build e punto di avvio vanno completati a mano.",
+        )
+        return "vuota"
+
+    percorso_out = f"{output_dir}/{FILE_COMPOSITION}"
+    with open(percorso_out, "w", encoding="utf-8") as f:
+        f.write(_intestazione_documento(percorso_out, _nome_progetto(session_id)))
+        f.write(
+            "File che tengono insieme la soluzione: file di build, punto di "
+            "avvio completo, configurazione di esempio e istruzioni di avvio. "
+            "Sono generati per ultimi, a partire dall'inventario di tutto il "
+            "codice migrato.\n"
+        )
+        for percorso, codice in prodotti.items():
+            f.write(f"\n\n/// FILEPATH: {percorso}\n```\n{codice}\n```\n")
+
+    riscritti = [p for p in prodotti if p in blocchi]
+    log_message(
+        session_id,
+        f"✅ Composizione finale: {len(prodotti)} file prodotti"
+        + (f" (punto di avvio riscritto: {', '.join(riscritti)})." if riscritti else "."),
+    )
+    return "ok"
+
+
 def _ordina_per_dominio(lista_file, output_dir, session_id=None):
     """
     Riordina i file da migrare raggruppando quelli dello stesso dominio.
@@ -1422,12 +1734,35 @@ def run_implementation_phase(
                 esiti["falliti"].append(nome_file)
 
 
+    # 3-bis. COMPOSIZIONE FINALE: i file che tengono insieme la soluzione.
+    # Si ricompone solo se in questa run e' stato migrato almeno un file (o
+    # se la composizione non esiste ancora): rilanciare la fase per i soli
+    # file falliti deve aggiornare il punto di avvio, ma un rilancio in cui
+    # non cambia nulla non deve ripagare la stessa chiamata.
+    percorso_composizione = f"{output_dir}/{FILE_COMPOSITION}"
+    if not processati:
+        esiti["composizione"] = "saltata"
+    elif os.path.exists(percorso_composizione) and not esiti["completati"]:
+        esiti["composizione"] = "invariata"
+        log_message(
+            session_id,
+            "⏭️ Composizione finale gia' presente e nessun file nuovo: non viene rigenerata.",
+        )
+    else:
+        esiti["composizione"] = _componi_soluzione(
+            llm, linguaggio_target, output_dir, contesto_adr,
+            progetti_generati, session_id, tracker,
+        )
+
     # 4. QUALITY CHECK finale, a blocchi per non saturare la context window
     codice_backend = _read_if_exists(percorso_backend, "")
     codice_frontend = _read_if_exists(percorso_frontend, "")
+    codice_composizione = _read_if_exists(percorso_composizione, "")
     codice_completo = (
         f"===== CODICE BACKEND GENERATO =====\n{codice_backend}\n\n"
         f"===== CODICE FRONTEND GENERATO =====\n{codice_frontend}"
+        + (f"\n\n===== FILE DI COMPOSIZIONE DELLA SOLUZIONE =====\n{codice_composizione}"
+           if codice_composizione else "")
     )
 
     chunks = _chunk_text(codice_completo, QA_CHUNK_MAX_CHARS)
@@ -1581,7 +1916,7 @@ def run_implementation_phase(
     if quality_gate:
         validazione = _valida_fase(
             llm, output_dir, "Fase 3 · Implementation",
-            [FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_QUALITY_REPORT],
+            [FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_COMPOSITION, FILE_QUALITY_REPORT],
             FILE_VALIDATION_FASE3, session_id, tracker,
         )
         if validazione:

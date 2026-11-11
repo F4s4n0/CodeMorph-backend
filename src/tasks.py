@@ -1118,6 +1118,122 @@ def get_quality_check_task(
     return [quality_check_task]
 
 # =====================================================================
+# composizione finale della soluzione
+# =====================================================================
+
+def get_composition_task(
+    agents,
+    linguaggio_target,
+    inventario,
+    file_di_avvio="",
+    contesto_adr="",
+    progetti_esistenti=None,
+    inventario_ridotto=False,
+):
+    """
+    Task dell'ULTIMO passo della Fase 3: scrive i file che tengono insieme la
+    soluzione (file di build, punto di avvio completo, configurazione di
+    esempio, istruzioni di avvio).
+
+    Nessun file legacy corrisponde a questi file, quindi nessuna passata della
+    migrazione li produce: senza questo passo il codice e' corretto file per
+    file ma la soluzione non si apre e non parte.
+
+    Il prompt e' NEUTRO rispetto allo stack: non nomina .csproj o pom.xml come
+    obbligo, chiede "i file previsti dallo stack scelto".
+    """
+    # Inventario, file di avvio e ADR entrano nella description cosi' come
+    # sono: la crew parte senza inputs, quindi nulla interpreta le graffe
+    # (vedi nota in testa al modulo).
+    safe_inventario = inventario or ""
+    safe_avvio = file_di_avvio or "(nessun file di avvio trovato fra quelli generati)"
+    safe_adr = contesto_adr or "Nessun ADR."
+    elenco_progetti = ", ".join(sorted(progetti_esistenti or [])) or "(dedurli dall'inventario)"
+
+    nota_ridotto = (
+        "NOTA: l'inventario e' stato abbreviato per dimensione; di alcuni file "
+        "vedi solo il percorso. Collega solo cio' di cui vedi la dichiarazione "
+        "e riporta gli altri fra i Punti aperti.\n\n"
+        if inventario_ridotto else ""
+    )
+
+    composition_task = Task(
+        description=(
+            f"Sei all'ULTIMO passo della migrazione verso: {linguaggio_target}.\n"
+            "Tutti i file sorgente sono GIA' stati generati, uno per ogni file "
+            "legacy, ciascuno in una passata separata. Nessuna passata aveva il "
+            "compito di scrivere i file che tengono insieme la soluzione: e' il "
+            "tuo compito adesso. NON devi migrare altro codice.\n\n"
+            f"PROGETTI DELLA SOLUZIONE: {elenco_progetti}\n\n"
+            "INVENTARIO DEI FILE GENERATI (percorso, dichiarazioni, costruttori "
+            "e librerie importate per progetto):\n"
+            f"\"\"\"\n{safe_inventario}\n\"\"\"\n\n"
+            + nota_ridotto
+            + "FILE DI AVVIO ESISTENTI (testo completo):\n"
+            f"\"\"\"\n{safe_avvio}\n\"\"\"\n\n"
+            "DECISIONI ARCHITETTURALI APPROVATE (ADR):\n"
+            f"\"\"\"\n{safe_adr}\n\"\"\"\n\n"
+            "COSA DEVI PRODURRE — solo questi file, nient'altro:\n"
+            "1. FILE DI BUILD previsti dallo stack scelto: uno per ciascun "
+            "progetto o modulo dell'inventario, piu' l'eventuale file che li "
+            "raggruppa alla radice (soluzione, workspace o equivalente). "
+            "Dichiara i riferimenti fra progetti e le librerie esterne "
+            "EFFETTIVAMENTE importate nell'inventario, non altre.\n"
+            "2. PUNTO DI AVVIO COMPLETO: riscrivi il file di avvio esistente, "
+            "allo STESSO percorso, collegando o registrando TUTTI i componenti "
+            "dell'inventario che lo richiedono (servizi, repository, presenter "
+            "o controller, viste, classi di configurazione), secondo il "
+            "meccanismo previsto dall'ADR e rispettando i parametri dei "
+            "costruttori riportati nell'inventario. Se il file di avvio "
+            "contiene una definizione provvisoria (stub) di un tipo che "
+            "nell'inventario ha il proprio file, ELIMINALA: due definizioni "
+            "dello stesso tipo impediscono la compilazione. Non lasciare "
+            "commenti del tipo 'verra' registrato in seguito'.\n"
+            "3. CONFIGURAZIONE DI ESEMPIO: il file di configurazione letto dal "
+            "punto di avvio, con tutte le chiavi usate dal codice e valori "
+            "segnaposto. MAI credenziali, host o stringhe di connessione reali.\n"
+            "4. README_AVVIO.md alla radice: prerequisiti, comandi per "
+            "compilare, avviare ed eseguire i test, e una sezione 'Punti "
+            "aperti' con cio' che NON hai potuto collegare e perche'.\n\n"
+            "VINCOLI OBBLIGATORI:\n"
+            "- NON riscrivere e NON modificare gli altri file dell'inventario: "
+            "i blocchi che ne ripetono il percorso vengono scartati.\n"
+            "- NON inventare classi di logica applicativa. Se un'interfaccia "
+            "non ha una classe che la implementa, o un componente di "
+            "interfaccia utente non e' inserito in nessuna schermata, NON "
+            "crearli tu: elencali nei 'Punti aperti' con il nome esatto.\n"
+            "- Usa ESATTAMENTE i nomi, gli spazi dei nomi e le cartelle "
+            "dell'inventario. Non creare progetti nuovi.\n"
+            "- Se lo stesso progetto ha file sotto piu' radici (ad esempio sia "
+            "sotto src/backend sia sotto src/frontend), scrivi UN SOLO file di "
+            "build per quel progetto e includi i file dell'altra radice con "
+            "percorsi relativi.\n"
+            "- Nel progetto di test dichiara le librerie di test effettivamente "
+            "importate dai test dell'inventario.\n"
+            "- PROPORZIONE: produci solo i file dei punti 1-4. Nessuna "
+            "spiegazione fuori dai blocchi.\n\n"
+            "FORMATO DI OUTPUT OBBLIGATORIO (ripetuto per ogni file):\n"
+            "/// FILEPATH: percorso/relativo/del/file\n"
+            "```\n"
+            "[contenuto del file]\n"
+            "```\n"
+            "Il percorso dopo /// FILEPATH: deve essere sempre RELATIVO (mai "
+            "assoluto, mai contenente '..') e, per i file dentro un progetto, "
+            "deve usare la stessa cartella che quel progetto ha nell'inventario."
+        ) + _nota_data(),
+        expected_output=(
+            "I file di build, il punto di avvio completo, la configurazione di "
+            "esempio e README_AVVIO.md (con la sezione 'Punti aperti'), "
+            "ciascuno in un blocco nel formato /// FILEPATH richiesto. "
+            "Nessun altro file e nessun testo fuori dai blocchi."
+        ),
+        agent=agents["senior_migration_developer"],
+    )
+
+    return [composition_task]
+
+
+# =====================================================================
 # validatore dei task
 # =====================================================================
 
