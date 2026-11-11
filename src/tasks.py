@@ -122,6 +122,34 @@ _PROGETTAZIONE_INTERFACCIA = """
 # FASE 1 - UNDERSTANDING
 # =====================================================================
 
+# Il codice sorgente va dato a TUTTI gli agenti della Fase 1, non solo al
+# primo. In CrewAI il `context` di un task porta con se' soltanto l'OUTPUT dei
+# task precedenti, non la loro description: finche' {codice_legacy} compariva
+# solo nell'assessment, mappa delle dipendenze, documentazione tecnica,
+# documentazione funzionale e test book venivano scritti senza vedere una
+# riga di codice. I loro prompt pero' chiedono formule, soglie e valori
+# cablati "trovati nel sorgente": potevano solo ripetere cio' che l'inventario
+# aveva riportato, e inventare o omettere il resto.
+#
+# Il costo e' noto e accettato: il sorgente viene inviato cinque volte invece
+# di una. E' il prezzo perche' ogni documento nasca dall'evidenza primaria
+# invece che dal riassunto di un collega.
+#
+# {codice_legacy} e' un segnaposto risolto da CrewAI al kickoff (la crew
+# della Fase 1 parte CON inputs): il testo non va incollato qui.
+_BLOCCO_SORGENTI_FASE1 = (
+    "CODICE SORGENTE LEGACY (evidenza primaria), preceduto dal grafo delle "
+    "dipendenze gia' calcolato sul sistema:\n\n"
+    "\"\"\"\n{codice_legacy}\n\"\"\"\n\n"
+    "Quello qui sopra e' il sistema reale, ed e' la tua fonte principale. I "
+    "documenti dei colleghi che ricevi come contesto sono una guida per "
+    "orientarti e per restare coerente con loro nei nomi, NON un sostituto "
+    "del codice: in caso di discrepanza fa fede il codice. Non attribuire al "
+    "sistema componenti, tabelle, campi o regole che non trovi nel codice, e "
+    "non limitarti a ripetere cio' che i colleghi hanno gia' scritto quando "
+    "il codice ti permette di essere piu' preciso.\n\n"
+)
+
 def get_understanding_tasks(agents, output_dir, numero_file=0):
     """
     Ritorna i task per la FASE 1: Understanding (Universale).
@@ -264,11 +292,18 @@ def get_understanding_tasks(agents, output_dir, numero_file=0):
 
     map_dependency_task = Task(
         description=(
-            "Analizza l'inventario e il codice legacy per costruire una mappa "
+            _BLOCCO_SORGENTI_FASE1
+            + "Analizza l'inventario e il codice legacy per costruire una mappa "
             "dettagliata delle dipendenze interne ed esterne. Individua le relazioni "
             "e le interazioni reciproche tra: moduli applicativi, librerie, file di "
             "configurazione, schemi o tabelle del database e script di orchestrazione "
-            "o processi batch."
+            "o processi batch.\n"
+            "Parti dal grafo delle dipendenze riportato in testa al codice e "
+            "VERIFICALO sul sorgente: e' stato estratto in automatico e puo' "
+            "contenere archi imprecisi o mancanti. Riporta solo dipendenze che "
+            "trovi davvero nel codice (chiamate, inclusioni, tabelle aperte o "
+            "interrogate); se un componente non ha dipendenze, dichiaralo "
+            "isolato invece di collegarlo per forza."
             + MERMAID_RULES + CONVENZIONI_FASE1
         )+ _nota_data(),
         expected_output=(
@@ -287,7 +322,9 @@ def get_understanding_tasks(agents, output_dir, numero_file=0):
 
     documentation_task = Task(
         description=(
-            "Prendi in carico i dati dell'Assessment e della Mappa delle Dipendenze. "
+            _BLOCCO_SORGENTI_FASE1
+            + "Prendi in carico il codice sorgente insieme ai dati dell'Assessment "
+            "e della Mappa delle Dipendenze. "
             "Genera la documentazione puramente TECNICA del sistema legacy: struttura "
             "del codice originario, flussi logici, gestione I/O, pattern architetturali "
             "rilevati e come i dati persistono.\n\n"
@@ -327,7 +364,8 @@ def get_understanding_tasks(agents, output_dir, numero_file=0):
 
     functional_analysis_task = Task(
         description=(
-            "Analizza l'Assessment, la Mappa delle Dipendenze e il codice sorgente "
+            _BLOCCO_SORGENTI_FASE1
+            + "Analizza l'Assessment, la Mappa delle Dipendenze e il codice sorgente "
             "originario. Astrai la logica di programmazione per individuare i "
             "processi di business reali. Scrivi un Product Backlog in stile Agile "
             "contenente:\n"
@@ -368,11 +406,17 @@ def get_understanding_tasks(agents, output_dir, numero_file=0):
 
     test_book_task = Task(
         description=(
-            "Sulla base della documentazione tecnica e funzionale appena prodotta, "
+            _BLOCCO_SORGENTI_FASE1
+            + "Sulla base del codice sorgente e della documentazione tecnica e "
+            "funzionale appena prodotta, "
             "progetta una strategia di test per la migrazione. Genera automaticamente "
             "un set di Test Funzionali (scenari di test basati sulle regole di "
             "business estratte) e di Contract Test (test di contratto per garantire "
-            "l'equivalenza delle interfacce e delle API di comunicazione)."
+            "l'equivalenza delle interfacce e delle API di comunicazione).\n"
+            "I valori attesi dei test (soglie, risultati di calcolo, codici, "
+            "messaggi) devono venire dal codice sorgente: se la documentazione "
+            "cita una regola senza i suoi valori, ricavali dal codice invece "
+            "di lasciare il caso generico."
              + CONVENZIONI_FASE1
         ),
         expected_output=(
