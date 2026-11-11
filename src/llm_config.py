@@ -13,6 +13,13 @@ _PROVIDERS = {
 
 logger = logging.getLogger(__name__)
 
+# Da qui nascono tutti gli LLM della piattaforma: e' il punto giusto per
+# attivare il controllo che rileva le risposte interrotte dal limite di
+# lunghezza (vedi src/troncamento.py). Osserva soltanto, non cambia nulla.
+from src.troncamento import installa_controllo_troncamento  # noqa: E402
+
+installa_controllo_troncamento()
+
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
