@@ -22,17 +22,20 @@ from src.config import (
 )
 
 # =====================================================================
-# HELPER PER LA SICUREZZA DEI PROMPT
+# GRAFFE NEI TESTI ESTERNI (codice legacy, report generati)
 # =====================================================================
-def _escape_braces(text: str) -> str:
-    """
-    Sostituisce { con {{ e } con }} nei testi esterni (codice legacy, report generati).
-    Previene l'errore "Missing required template variable" di LangChain/CrewAI,
-    che cerca erroneamente di interpretare le graffe del codice o dei JSON come variabili.
-    """
-    if not text:
-        return ""
-    return str(text).replace("{", "{{").replace("}", "}}")
+# I testi esterni NON vanno "protetti" raddoppiando le graffe. CrewAI
+# interpola le description solo quando kickoff() riceve `inputs`, e lo fa per
+# sostituzione testuale di {nome}: non esiste un passaggio che riporti {{ a {.
+# Il raddoppio arrivava quindi tale e quale al modello, che leggeva sorgenti,
+# ADR e schema SQL con {{ }} al posto di ogni graffa (verificato su CrewAI
+# 0.203.2 catturando il prompt inviato).
+#
+# Le regole sono due:
+# - crew avviate SENZA inputs (Fase 3, Quality Check): il testo esterno si
+#   inserisce cosi' com'e' nella description, perche' nulla lo interpreta;
+# - crew avviate CON inputs (Fasi 1 e 2, Quality Gate): il testo esterno NON
+#   si incolla nella description ma passa da inputs, tramite un segnaposto.
 
 
 def _nota_data():
@@ -458,9 +461,6 @@ def get_design_tasks(agents, output_dir, contesto_fase1="", numero_file=0,
             "deve reggere una migrazione di questa portata. " + vincolo_ampiezza
         )
 
-    # 🛡️ PROTEZIONE: Disinnesca le graffe generate in Fase 1
-    safe_contesto = _escape_braces(contesto_fase1)
-
   # Il contenuto dei documenti arriva via inputs al kickoff, NON incollato
     # qui: i documenti citano codice legacy pieno di graffe ({num1}, ecc.)
     # che il template engine di CrewAI scambierebbe per placeholder.
@@ -622,12 +622,16 @@ def get_iterative_implementation_tasks(
     namespace leggermente diversi (es. Dtos/ e DTOs/ come cartelle distinte).
     """
 
-    # 🛡️ PROTEZIONE: Disinnesca le graffe dal codice legacy originale e dai report
-    safe_legacy = _escape_braces(contenuto_file_legacy)
-    safe_adr = _escape_braces(contesto_adr)
-    safe_sql = _escape_braces(contesto_sql)
-    safe_funzionale = _escape_braces(contesto_funzionale)
-    safe_test = _escape_braces(contesto_test)
+    # Codice legacy e documenti entrano nelle description SENZA ritocchi alle
+    # graffe: la crew di questo file parte con kickoff() privo di inputs,
+    # quindi CrewAI non interpola nulla (vedi nota in testa al modulo).
+    # Attenzione: se un giorno questa crew ricevesse inputs, questi testi
+    # andrebbero spostati li' dentro, non "protetti" raddoppiando le graffe.
+    safe_legacy = contenuto_file_legacy or ""
+    safe_adr = contesto_adr or ""
+    safe_sql = contesto_sql or ""
+    safe_funzionale = contesto_funzionale or ""
+    safe_test = contesto_test or ""
 
     # Qui linguaggio_target e' un parametro Python: il profilo si decide in
     # codice e i prompt ricevono solo le istruzioni pertinenti.
@@ -637,7 +641,7 @@ def get_iterative_implementation_tasks(
         elenco_prog = ", ".join(sorted(progetti_esistenti))
         blocco_progetti = f"""
         ARCHITETTURA APPROVATA DAL CLIENTE — USA QUESTI PROGETTI, NON CREARNE ALTRI:
-        {_escape_braces(elenco_prog)}
+        {elenco_prog}
         Ogni file che produci deve stare in UNO di questi progetti. NON
         inventare nomi nuovi, NON aggiungere suffissi tipo "Modernized",
         "New" o "WebApi", NON alternare punti e underscore: `Fox.Warehouse` e
@@ -731,7 +735,7 @@ def get_iterative_implementation_tasks(
 
         blocco_tipi_esistenti = f"""
         TIPI GIÀ GENERATI NEI FILE PRECEDENTI (NON RIDEFINIRLI):
-        {_escape_braces(chr(10) + "        ".join(parti))}
+        {chr(10) + "        ".join(parti)}
         Se ti serve uno di questi, RIUSALO importandolo con lo stesso nome e lo
         stesso namespace. Non crearne una variante, non cambiarne il nome, non
         duplicarne il file: sono già presenti nel progetto.
@@ -972,8 +976,11 @@ def get_quality_check_task(
     Task per il controllo qualità.
     """
     
-    # 🛡️ PROTEZIONE: Disinnesca le graffe dal codice sorgente appena generato
-    safe_codice = _escape_braces(codice_da_analizzare)
+    # Il codice generato entra nella description cosi' com'e': la crew del
+    # Quality Check parte senza inputs, quindi nulla interpreta le graffe
+    # (vedi nota in testa al modulo). Raddoppiarle faceva revisionare codice
+    # con {{ }} ovunque.
+    safe_codice = codice_da_analizzare or ""
     
     intestazione_chunk = f" ({chunk_label})" if chunk_label else ""
 
