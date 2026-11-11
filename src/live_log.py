@@ -20,6 +20,8 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from src.config import WORKSPACE_DIR
+from src.maschera_log import maschera_testo
+from src.troncamento import azzera_chiamate, ultima_risposta_interrotta
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,10 @@ FUSO_ROMA = ZoneInfo("Europe/Rome")
 
 def log_message(session_id, message):
     """Stampa il log sulla console server e lo accoda al file live della sessione."""
+    # Mascherato PRIMA di stampare e di scrivere: print() non passa dal
+    # logging, e questo file viene mostrato al cliente nel log live. Un
+    # messaggio di errore puo' contenere l'URL della chiamata con la chiave.
+    message = maschera_testo(message)
     riga = f"[{datetime.now(FUSO_ROMA).strftime('%H:%M:%S')}] {message}"
     print(riga)
 
@@ -63,8 +69,15 @@ def crea_logger_attivita(session_id, tasks, etichetta=""):
     ruoli = [_ruolo_del_task(t) for t in tasks]
     suffisso = f" — {etichetta}" if etichetta else ""
     stato = {"completati": 0}
+    # Indici (da 0) dei task la cui risposta e' stata interrotta dal limite
+    # di lunghezza: chi salva i documenti li legge da task_callback.task_troncati
+    # per scrivere l'avviso anche dentro il deliverable.
+    troncati = set()
 
     def annuncia_avvio():
+        # Le chiamate fatte prima di questa crew nello stesso thread (grafo
+        # delle dipendenze, sintesi dei contesti) non riguardano i suoi task.
+        azzera_chiamate()
         if ruoli:
             log_message(
                 session_id,
@@ -98,6 +111,20 @@ def crea_logger_attivita(session_id, tasks, etichetta=""):
                 f"📈 [{ruolo}] task {numero}/{len(ruoli)} completato{dettaglio}",
             )
 
+            # Un documento tagliato dal limite di lunghezza sembra completo a
+            # chi guarda solo il numero di caratteri: va detto esplicitamente.
+            interrotta = ultima_risposta_interrotta()
+            if interrotta:
+                troncati.add(indice)
+                token = interrotta.get("token_output")
+                misura = f" dopo {token:,} token".replace(",", ".") if token else ""
+                log_message(
+                    session_id,
+                    f"⚠️ [{ruolo}] risposta INTERROTTA dal limite di lunghezza{misura}: "
+                    "il risultato e' incompleto, manca la parte finale. Valuta un "
+                    "limite di output piu' alto o una selezione di file piu' stretta.",
+                )
+
             stato["completati"] += 1
             prossimo = stato["completati"]
             if prossimo < len(ruoli):
@@ -108,4 +135,5 @@ def crea_logger_attivita(session_id, tasks, etichetta=""):
         except Exception as e:
             logger.warning("Callback di log attività fallito: %s", e)
 
+    task_callback.task_troncati = troncati
     return annuncia_avvio, task_callback

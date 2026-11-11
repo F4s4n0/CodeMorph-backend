@@ -36,6 +36,7 @@ from src.graph_builder import (
     process_directory_to_graph,
 )
 from src.live_log import log_message
+from src.maschera_log import installa_maschera_log
 from src.llm_config import get_llm
 from src.token_tracker import TokenUsageTracker
 from trial import router as trial_router
@@ -44,69 +45,12 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 
-class MascheraChiaviURL(logging.Filter):
-    """
-    httpx registra l'URL completo di ogni richiesta HTTP. Google passa la
-    chiave API in query string (?key=...), quindi senza questo filtro la
-    chiave finisce IN CHIARO nei log di Render, che sono consultabili e
-    spesso vengono copiati altrove per chiedere aiuto.
-    Anthropic non e' esposta allo stesso modo (chiave nell'header).
-    """
-
-    _CHIAVE = re.compile(
-        r"([?&](?:key|api_key|apikey|access_token|token)=)[^&\s\"']+",
-        re.IGNORECASE,
-    )
-
-    def filter(self, record):
-        try:
-            record.msg = self._CHIAVE.sub(r"\1***", str(record.msg))
-            if record.args:
-                record.args = tuple(
-                    self._CHIAVE.sub(r"\1***", a) if isinstance(a, str) else a
-                    for a in record.args
-                )
-        except Exception:
-            pass          # il logging non deve mai far fallire una richiesta
-        return True
-
-
-# Sul logger "httpx", non sul root: i filtri NON si propagano ai logger figli,
-# quindi applicarlo altrove non avrebbe alcun effetto.
-def _applica_maschera_chiavi():
-    """
-    Applica il filtro a TUTTI gli handler, root compreso.
-
-    In Python i filtri su un LOGGER non vengono applicati ai record che
-    arrivano dai suoi FIGLI: httpx registra da `httpx._client`, che propaga a
-    `httpx` solo per raggiungere gli handler, saltandone i filtri. E' cosi'
-    che la chiave API di Google continuava a comparire in chiaro nei log
-    nonostante il filtro fosse installato.
-
-    Sugli HANDLER passa invece tutto cio' che viene effettivamente scritto,
-    da qualunque logger provenga.
-    """
-    maschera = MascheraChiaviURL()
-
-    def _aggiungi(destinazione):
-        if not any(isinstance(f, MascheraChiaviURL) for f in destinazione.filters):
-            destinazione.addFilter(maschera)
-
-    root = logging.getLogger()
-    _aggiungi(root)
-    for handler in root.handlers:
-        _aggiungi(handler)
-
-    # Chi installa handler propri (uvicorn) non passa dal root.
-    for nome in ("httpx", "httpx._client", "uvicorn", "uvicorn.error",
-                 "uvicorn.access", "LiteLLM", "litellm"):
-        obiettivo = logging.getLogger(nome)
-        _aggiungi(obiettivo)
-        for handler in obiettivo.handlers:
-            _aggiungi(handler)
-
-
-_applica_maschera_chiavi()
+# Le chiavi API non devono comparire nei log di Render, che sono consultabili
+# e spesso vengono copiati altrove per chiedere aiuto. Il mascheramento vive
+# in src/maschera_log.py: agisce alla creazione di ogni record, quindi copre
+# anche l'URL che httpx passa come oggetto e i traceback delle eccezioni,
+# i due punti da cui la chiave di Google continuava a uscire in chiaro.
+installa_maschera_log()
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +105,7 @@ def _riapplica_maschera_chiavi():
     seconda applicazione il filtro coprirebbe solo gli handler esistenti a
     import-time, e una chiave API potrebbe comparire in chiaro nei log.
     """
-    _applica_maschera_chiavi()
+    installa_maschera_log()
 
 
 @app.on_event("startup")

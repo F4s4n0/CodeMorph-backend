@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import textwrap
 import time                   # il modulo, NON datetime.time: quella e' una
                               # classe senza sleep() e mascherava il modulo.
 import interruzione
@@ -239,15 +240,29 @@ def _intestazione_documento(percorso, nome_progetto=""):
     )
 
 
-def _salva_output_su_disco(tasks, output_dir, nome_progetto=""):
+_AVVISO_DOCUMENTO_INTERROTTO = (
+    "DOCUMENTO INCOMPLETO. La generazione e' stata interrotta dal limite di "
+    "lunghezza della risposta del modello: la parte finale del documento "
+    "manca. Le sezioni presenti sono utilizzabili, ma il documento non copre "
+    "tutto cio' che avrebbe dovuto. Per ottenerlo completo ripeti la fase con "
+    "un limite di output piu' alto o con una selezione di file piu' stretta."
+)
+
+
+def _salva_output_su_disco(tasks, output_dir, nome_progetto="", troncati=()):
     """
     Scrive esplicitamente l'output di ogni task nella cartella di sessione.
     ATTENZIONE: non fidarsi di task.output_file per la CARTELLA — le versioni
     recenti di CrewAI sanificano i percorsi assoluti rimuovendo la '/' iniziale,
     trasformandoli in relativi (finirebbero dentro la cartella del progetto).
     Da output_file prendiamo SOLO il nome del file; la cartella è la nostra.
+
+    `troncati` sono gli indici dei task la cui risposta e' stata interrotta
+    dal limite di lunghezza (rilevati dal log attivita'): il documento viene
+    salvato comunque, ma con un avviso in testa, perche' un deliverable
+    tagliato che sembra completo e' peggio di uno dichiaratamente parziale.
     """
-    for task in tasks:
+    for indice, task in enumerate(tasks):
         percorso_task = getattr(task, "output_file", None)
         if not percorso_task:
             continue
@@ -265,8 +280,19 @@ def _salva_output_su_disco(tasks, output_dir, nome_progetto=""):
             if n_mermaid:
                 logger.info("%s: corrette %d anomalie di sintassi Mermaid.",
                             os.path.basename(percorso), n_mermaid)
+            interrotto = indice in troncati
+            if interrotto:
+                logger.warning("%s: risposta interrotta dal limite di lunghezza, "
+                               "documento salvato con avviso.", os.path.basename(percorso))
             if percorso.lower().endswith(".md"):
-                contenuto = _intestazione_documento(percorso, nome_progetto) + contenuto
+                avviso = (f"> ⛔ **{_AVVISO_DOCUMENTO_INTERROTTO}**\n\n---\n\n"
+                          if interrotto else "")
+                contenuto = _intestazione_documento(percorso, nome_progetto) + avviso + contenuto
+            elif interrotto:
+                # File non markdown (lo schema .sql): l'avviso va in commenti,
+                # cosi' il file resta eseguibile fin dove arriva.
+                righe = "\n".join("-- " + r for r in textwrap.wrap(_AVVISO_DOCUMENTO_INTERROTTO, 76))
+                contenuto = f"-- ATTENZIONE\n{righe}\n\n{contenuto}"
             os.makedirs(output_dir, exist_ok=True)
             with open(percorso, "w", encoding="utf-8") as f:
                 f.write(contenuto)
@@ -928,7 +954,8 @@ def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tra
 
     annuncia_avvio()
     risultato = crew.kickoff(inputs={"codice_legacy": codice_legacy})
-    _salva_output_su_disco(tasks, output_dir, _nome_progetto(session_id))
+    _salva_output_su_disco(tasks, output_dir, _nome_progetto(session_id),
+                           troncati=getattr(task_callback, "task_troncati", ()))
     # Verifica deterministica: un'istruzione nel prompt non garantisce che gli
     # agenti abbiano davvero citato tutto.
     try:
@@ -1041,7 +1068,8 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
         "contesto_fase1": contesto_fase1 or "Nessun documento di Fase 1 disponibile.",
         "contesto_sorgenti": contesto_sorgenti,
     })
-    _salva_output_su_disco(tasks, output_dir, _nome_progetto(session_id))
+    _salva_output_su_disco(tasks, output_dir, _nome_progetto(session_id),
+                           troncati=getattr(task_callback, "task_troncati", ()))
     if tracker is not None:
         tracker.aggiungi_crew(crew, risultato)
         _salva_consumo_parziale(session_id, tracker)
@@ -1657,7 +1685,8 @@ def _valida_fase(llm, output_dir, nome_fase, file_da_validare, nome_report,
         annuncia()
         # Il contenuto passa da inputs: mai concatenato nella description
         risultato = crew.kickoff(inputs={"contenuto_fase": contenuto_fase})
-        _salva_output_su_disco(tasks, output_dir, _nome_progetto(session_id))
+        _salva_output_su_disco(tasks, output_dir, _nome_progetto(session_id),
+                               troncati=getattr(callback, "task_troncati", ()))
         if tracker is not None:
             tracker.aggiungi_crew(crew, risultato)
             _salva_consumo_parziale(session_id, tracker)
