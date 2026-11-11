@@ -20,6 +20,7 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from src.config import WORKSPACE_DIR
+from src.maschera_log import maschera_testo
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,10 @@ FUSO_ROMA = ZoneInfo("Europe/Rome")
 
 def log_message(session_id, message):
     """Stampa il log sulla console server e lo accoda al file live della sessione."""
+    # Mascherato PRIMA di stampare e di scrivere: print() non passa dal
+    # logging, e questo file viene mostrato al cliente nel log live. Un
+    # messaggio di errore puo' contenere l'URL della chiamata con la chiave.
+    message = maschera_testo(message)
     riga = f"[{datetime.now(FUSO_ROMA).strftime('%H:%M:%S')}] {message}"
     print(riga)
 
