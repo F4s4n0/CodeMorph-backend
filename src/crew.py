@@ -22,6 +22,12 @@ from src.config import (
     FILE_BACKEND_IMPL,
     FILE_FRONTEND_IMPL,
     FILE_COMPOSITION,
+    FILE_DATA_MIGRATION_PLAN,
+    FILE_DATA_MIGRATION_SCRIPTS,
+    CARTELLA_MIGRAZIONE_DATI,
+    MIGRAZIONE_DATI_MAX_CHARS_PIANO,
+    MIGRAZIONE_DATI_MAX_CHARS_SCHEMA,
+    MIGRAZIONE_DATI_MAX_CHARS_LEGACY,
     FILE_IMPL_CHECKPOINT,
     FILE_QUALITY_REPORT,
     FILE_TEST_BOOK,
@@ -99,6 +105,7 @@ from src.tasks import (
     get_iterative_implementation_tasks,
     get_quality_check_task,
     get_composition_task,
+    get_data_migration_scripts_task,
     get_validation_task,
 )
 
@@ -1206,6 +1213,159 @@ def _verifica_copertura_inventario(output_dir, codice_legacy, session_id):
         f.write(testo.rstrip() + "\n" + "\n".join(coda))
 
 
+# Estensioni dei file legacy che descrivono STRUTTURE di dati: servono a chi
+# scrive gli script di migrazione per conoscere campi e tipi delle sorgenti.
+_ESTENSIONI_STRUTTURE_DATI = (".dbf", ".sql", ".ddl", ".cpy", ".dds", ".pf", ".lf")
+
+
+def _strutture_dati_legacy(lista_file_legacy, max_char):
+    """
+    Schemi delle sorgenti dati legacy, presi dai file gia' estratti per la
+    Fase 3 (per i .dbf il contenuto E' lo schema: nomi, tipi e lunghezze dei
+    campi, senza i dati). Ritorna (testo, ridotto).
+    """
+    parti, usati, ridotto = [], 0, False
+    for info in lista_file_legacy or []:
+        nome = str(info.get("nome", ""))
+        if not nome.lower().endswith(_ESTENSIONI_STRUTTURE_DATI):
+            continue
+        blocco = f"----- {nome} -----\n{info.get('codice', '')}\n"
+        if usati + len(blocco) > max_char:
+            ridotto = True
+            break
+        parti.append(blocco)
+        usati += len(blocco)
+    return "\n".join(parti), ridotto
+
+
+def _genera_script_migrazione_dati(llm, output_dir, lista_file_legacy,
+                                   session_id=None, tracker=None):
+    """
+    Passo della Fase 3 che traduce il Data Migration Plan (Fase 2) in script
+    Python, scritti in un documento a parte (FILE_DATA_MIGRATION_SCRIPTS) che
+    il chiamante sconfeziona nella cartella CARTELLA_MIGRAZIONE_DATI.
+
+    E' indipendente dal codice applicativo: dipende solo dal piano e dagli
+    schemi. Per questo gira una volta per fase, non per file legacy.
+
+    Ritorna "ok", "saltata" (nessun piano), "vuota" (nessun file utilizzabile)
+    oppure "fallita". Un fallimento NON invalida la fase: il codice migrato
+    resta consegnabile e l'esito e' dichiarato nel log.
+    """
+    piano = _read_if_exists(f"{output_dir}/{FILE_DATA_MIGRATION_PLAN}", "")
+    if not piano.strip():
+        log_message(
+            session_id,
+            "ℹ️ Script di migrazione dei dati non generati: manca il piano di "
+            f"migrazione dei dati ({FILE_DATA_MIGRATION_PLAN}). Rilancia la Fase 2 "
+            "per produrlo.",
+        )
+        return "saltata"
+
+    schema = _read_if_exists(f"{output_dir}/{FILE_DB_SCHEMA}", "")
+    strutture, ridotto = _strutture_dati_legacy(lista_file_legacy, MIGRAZIONE_DATI_MAX_CHARS_LEGACY)
+    if ridotto:
+        log_message(
+            session_id,
+            "ℹ️ Script di migrazione dei dati: gli schemi legacy superano la "
+            "dimensione gestibile e sono stati abbreviati; le tabelle non "
+            "incluse vengono prese dal piano.",
+        )
+
+    agents_dati = create_agents(llm)   # agenti nuovi: conteggio token corretto
+    tasks_dati = get_data_migration_scripts_task(
+        agents=agents_dati,
+        piano_migrazione_dati=_tronca_su_sezioni(piano, MIGRAZIONE_DATI_MAX_CHARS_PIANO),
+        schema_target=_tronca_su_sezioni(schema, MIGRAZIONE_DATI_MAX_CHARS_SCHEMA),
+        strutture_legacy=strutture,
+    )
+    annuncia, callback = crea_logger_attivita(
+        session_id, tasks_dati, etichetta="Script di migrazione dei dati"
+    )
+
+    def step_con_stop(step):
+        interruzione.verifica_stop(session_id)   # solleva se richiesto
+
+    crew_dati = Crew(
+        agents=[agents_dati["data_migration_engineer"]],
+        tasks=tasks_dati,
+        process=Process.sequential,
+        verbose=False,
+        memory=False,
+        step_callback=step_con_stop,
+        task_callback=callback,
+    )
+
+    log_message(session_id, "🗃️ Script di migrazione dei dati: scrittura in Python dal piano approvato...")
+    try:
+        annuncia()
+        risultato = crew_dati.kickoff()
+    except interruzione.FaseInterrotta:
+        raise
+    except Exception as e:
+        logger.exception("Generazione degli script di migrazione dei dati fallita.")
+        log_message(
+            session_id,
+            f"❌ Script di migrazione dei dati non generati — {type(e).__name__}: {e}. "
+            "Il codice applicativo resta disponibile; il piano dei dati e' "
+            f"comunque in {FILE_DATA_MIGRATION_PLAN}.",
+        )
+        if tracker is not None:
+            tracker.aggiungi_crew(crew_dati)
+            _salva_consumo_parziale(session_id, tracker)
+        return "fallita"
+
+    if tracker is not None:
+        tracker.aggiungi_crew(crew_dati, risultato)
+        _salva_consumo_parziale(session_id, tracker)
+
+    output = _task_output_text(tasks_dati[0])
+    output, n_mascherati = maschera_segreti(output, valori_noti=_SEGRETI_SESSIONE)
+    if n_mascherati:
+        logger.info("Script di migrazione dei dati: rimossi %d possibili segreti.", n_mascherati)
+
+    # Vincolo deterministico: questi script stanno SOLO nella loro cartella.
+    # Un blocco fuori sovrascriverebbe codice applicativo gia' migrato.
+    # Percorsi ripuliti da "./" o "/" iniziali, cosi' il controllo sulla
+    # cartella non scarta file validi scritti in forma leggermente diversa.
+    prodotti = {re.sub(r"^(?:\./|/)+", "", p): c for p, c in _blocchi_generati(output).items()}
+    prefisso = CARTELLA_MIGRAZIONE_DATI.rstrip("/") + "/"
+    fuori = [p for p in prodotti if not p.startswith(prefisso)]
+    for percorso in fuori:
+        del prodotti[percorso]
+    if fuori:
+        log_message(
+            session_id,
+            f"⚠️ Script di migrazione dei dati: scartati {len(fuori)} file fuori da "
+            f"{prefisso}: " + ", ".join(fuori[:3]),
+        )
+
+    if not prodotti:
+        log_message(session_id, "⚠️ Script di migrazione dei dati: il modello non ha prodotto file utilizzabili.")
+        return "vuota"
+
+    percorso_out = f"{output_dir}/{FILE_DATA_MIGRATION_SCRIPTS}"
+    interrotto = bool(getattr(callback, "task_troncati", ()))
+    with open(percorso_out, "w", encoding="utf-8") as f:
+        f.write(_intestazione_documento(percorso_out, _nome_progetto(session_id)))
+        if interrotto:
+            f.write(f"> ⛔ **{_AVVISO_DOCUMENTO_INTERROTTO}**\n\n---\n\n")
+        f.write(
+            "Script Python che migrano i dati del sistema legacy nel nuovo "
+            f"database, scritti dal piano {FILE_DATA_MIGRATION_PLAN}. Vanno "
+            "eseguiti prima su una COPIA del database di destinazione: "
+            "analisi dei dati, prova senza scrittura, caricamento, verifiche.\n"
+        )
+        for percorso, codice in prodotti.items():
+            f.write(f"\n\n/// FILEPATH: {percorso}\n```\n{codice}\n```\n")
+
+    log_message(
+        session_id,
+        f"✅ Script di migrazione dei dati: {len(prodotti)} file in {prefisso}.",
+    )
+    return "ok"
+
+
 def run_understanding_phase(llm, codice_legacy, output_dir, session_id=None, tracker=None, quality_gate=False):
     """
     Esegue la FASE 1: Understanding.
@@ -1365,6 +1525,7 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
         agents=[
             agents["cloud_solutions_architect"],
             agents["database_administrator"],
+            agents["data_migration_analyst"],
         ],
         tasks=tasks,
         process=Process.sequential,
@@ -1388,7 +1549,7 @@ def run_design_phase(llm, linguaggio_target, output_dir, session_id=None, tracke
     if quality_gate:
         _valida_fase(
             llm, output_dir, "Fase 2 · Design",
-            [FILE_MIGRATION_PLAN, FILE_DB_SCHEMA],
+            [FILE_MIGRATION_PLAN, FILE_DB_SCHEMA, FILE_DATA_MIGRATION_PLAN],
             FILE_VALIDATION_FASE2, session_id, tracker,
         )
     return risultato
@@ -1754,15 +1915,35 @@ def run_implementation_phase(
             progetti_generati, session_id, tracker,
         )
 
+    # 3-ter. SCRIPT DI MIGRAZIONE DEI DATI: dipendono dal piano della Fase 2,
+    # non dal codice migrato. Si rigenerano se mancano o se il piano e' stato
+    # modificato (ad esempio ricaricato al Check Point 2) dopo l'ultima volta.
+    percorso_piano_dati = f"{output_dir}/{FILE_DATA_MIGRATION_PLAN}"
+    percorso_script_dati = f"{output_dir}/{FILE_DATA_MIGRATION_SCRIPTS}"
+    if (os.path.exists(percorso_script_dati) and os.path.exists(percorso_piano_dati)
+            and os.path.getmtime(percorso_script_dati) >= os.path.getmtime(percorso_piano_dati)):
+        esiti["migrazione_dati"] = "invariata"
+        log_message(
+            session_id,
+            "⏭️ Script di migrazione dei dati gia' presenti e piano invariato: non vengono rigenerati.",
+        )
+    else:
+        esiti["migrazione_dati"] = _genera_script_migrazione_dati(
+            llm, output_dir, lista_file_legacy_estratti, session_id, tracker,
+        )
+
     # 4. QUALITY CHECK finale, a blocchi per non saturare la context window
     codice_backend = _read_if_exists(percorso_backend, "")
     codice_frontend = _read_if_exists(percorso_frontend, "")
     codice_composizione = _read_if_exists(percorso_composizione, "")
+    codice_script_dati = _read_if_exists(percorso_script_dati, "")
     codice_completo = (
         f"===== CODICE BACKEND GENERATO =====\n{codice_backend}\n\n"
         f"===== CODICE FRONTEND GENERATO =====\n{codice_frontend}"
         + (f"\n\n===== FILE DI COMPOSIZIONE DELLA SOLUZIONE =====\n{codice_composizione}"
            if codice_composizione else "")
+        + (f"\n\n===== SCRIPT DI MIGRAZIONE DEI DATI (Python) =====\n{codice_script_dati}"
+           if codice_script_dati else "")
     )
 
     chunks = _chunk_text(codice_completo, QA_CHUNK_MAX_CHARS)
@@ -1916,7 +2097,8 @@ def run_implementation_phase(
     if quality_gate:
         validazione = _valida_fase(
             llm, output_dir, "Fase 3 · Implementation",
-            [FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_COMPOSITION, FILE_QUALITY_REPORT],
+            [FILE_BACKEND_IMPL, FILE_FRONTEND_IMPL, FILE_COMPOSITION,
+             FILE_DATA_MIGRATION_SCRIPTS, FILE_QUALITY_REPORT],
             FILE_VALIDATION_FASE3, session_id, tracker,
         )
         if validazione:

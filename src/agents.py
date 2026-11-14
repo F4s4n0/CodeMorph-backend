@@ -9,8 +9,10 @@ def create_agents(llm):
       FASE 1 - Understanding : legacy_system_analyzer, dependency_mapper,
                                tech_business_documenter, functional_analyst,
                                qa_test_planner
-      FASE 2 - Design        : cloud_solutions_architect, database_administrator
+      FASE 2 - Design        : cloud_solutions_architect, database_administrator,
+                               data_migration_analyst
       FASE 3 - Implementation: senior_migration_developer, frontend_developer,
+                               data_migration_engineer,
                                security_quality_reviewer
 
     Nota architetturale: tutte le crew usano Process.sequential, quindi
@@ -158,6 +160,35 @@ def create_agents(llm):
         allow_delegation=False,
     )
 
+    # La migrazione dei DATI e' un mestiere distinto dalla progettazione dello
+    # schema: il DBA decide come saranno le tabelle nuove, qualcuno deve
+    # decidere come ci arrivano dentro i dati di quelle vecchie. Le regole
+    # nascono in Fase 2 (approvate al Check Point 2), gli script in Fase 3.
+    data_migration_analyst = Agent(
+        role='Data Migration Analyst',
+        goal=(
+            "Definire le regole, le procedure e le verifiche con cui i dati del "
+            "sistema legacy vengono trasferiti nel nuovo database, campo per campo."
+        ),
+        backstory=(
+            "Sei un data engineer con lunga esperienza in migrazioni di dati da "
+            "sistemi legacy (archivi DBF e ISAM, database relazionali datati, "
+            "file sequenziali) verso database moderni. Sai che una migrazione "
+            "fallisce sui dettagli: date vuote o impossibili, codici senza "
+            "anagrafica, duplicati, campi riusati per scopi diversi, encoding. "
+            "Per ogni campo del nuovo schema stabilisci da dove viene e come "
+            "si trasforma, e per ogni anomalia prevedibile una regola esplicita. "
+            "Non progetti lo schema, che e' gia' deciso, e non scrivi codice: "
+            "scrivi regole precise abbastanza da essere tradotte in codice "
+            "senza dover indovinare. Lavori solo sul codice e sugli schemi che "
+            "vedi: i dati reali non li hai, quindi distingui sempre cio' che e' "
+            "certo da cio' che e' un'ipotesi da verificare sui dati."
+        ),
+        llm=llm,
+        verbose=False,
+        allow_delegation=False,
+    )
+
     # --- FASE 3: IMPLEMENTATION AGENTS ---
 
     senior_migration_developer = Agent(
@@ -191,6 +222,30 @@ def create_agents(llm):
             "moderne, pulite e user-friendly. Sei un esperto nel consumare API REST "
             "o interagire con i layer di servizio creati dal team di backend. "
             "Metti sempre al primo posto l'usabilità (UX)."
+        ),
+        llm=llm,
+        verbose=False,
+        allow_delegation=False,
+    )
+
+    data_migration_engineer = Agent(
+        role='Data Migration Engineer',
+        goal=(
+            "Scrivere in Python gli script che estraggono, trasformano, caricano "
+            "e verificano i dati secondo il piano di migrazione approvato."
+        ),
+        backstory=(
+            "Sei un data engineer Python esperto di pipeline di migrazione: "
+            "SQLAlchemy per parlare con qualunque database, dbfread per gli "
+            "archivi FoxPro e dBase, caricamenti a lotti, transazioni, scarti "
+            "tracciati. Traduci un piano di migrazione in script affidabili e "
+            "rieseguibili, in cui ogni trasformazione rimanda alla regola del "
+            "piano che implementa. Non decidi regole nuove: se il piano lascia "
+            "un punto aperto, lo dichiari e fai fermare lo script su quel punto, "
+            "invece di indovinare. Sai che questi script verranno eseguiti su "
+            "dati reali che non hai visto, quindi li scrivi prudenti: prima "
+            "un'analisi dei dati, poi una prova senza scrittura, poi il "
+            "caricamento vero con le verifiche finali."
         ),
         llm=llm,
         verbose=False,
@@ -252,5 +307,7 @@ def create_agents(llm):
         "frontend_developer": frontend_developer,
         "security_quality_reviewer": security_quality_reviewer,
         "quality_gate_auditor": quality_gate_auditor,
+        "data_migration_analyst": data_migration_analyst,
+        "data_migration_engineer": data_migration_engineer,
 
     }

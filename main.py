@@ -27,7 +27,7 @@ from auth import _parse_expiry, get_current_user, get_current_user_and_validate_
 from payments import addebita_consumo_token, addebita_importo_token, verifica_credito_token
 from payments import router as payments_router
 from src.code_unpacker import unpack_markdown_to_files
-from src.config import FILE_BACKEND_IMPL, FILE_COMPOSITION, FILE_FRONTEND_IMPL, FILE_SELEZIONE, MODELLO_PREDEFINITO, WORKSPACE_DIR
+from src.config import FILE_BACKEND_IMPL, FILE_COMPOSITION, FILE_DATA_MIGRATION_SCRIPTS, FILE_FRONTEND_IMPL, FILE_SELEZIONE, MODELLO_PREDEFINITO, WORKSPACE_DIR
 from src.crew import run_understanding_phase, run_design_phase, run_implementation_phase
 from src.graph_builder import (
     ESTENSIONI_VALIDE,
@@ -1058,6 +1058,10 @@ def _lavoro_fase3(session_id, user_id, provider_llm, modello_llm,
         # completo deve sostituire quello parziale scritto durante la migrazione.
         # Se il documento non esiste (composizione saltata o fallita) ritorna 0.
         n_composizione = unpack_markdown_to_files(str(cartella_output / FILE_COMPOSITION), str(cartella_output))
+        # Gli script di migrazione dei dati stanno in una cartella propria
+        # (migrazione_dati/), quindi l'ordine rispetto agli altri e' indifferente.
+        n_script_dati = unpack_markdown_to_files(
+            str(cartella_output / FILE_DATA_MIGRATION_SCRIPTS), str(cartella_output))
 
         percorso_zip = _crea_zip_fase(
             str(WORKSPACE_DIR / f"{session_id}_finale"), str(cartella_output),
@@ -1087,7 +1091,8 @@ def _lavoro_fase3(session_id, user_id, provider_llm, modello_llm,
                 "file_falliti": esiti["falliti"],
                 "file_saltati_da_checkpoint": esiti["saltati"],
                 "file_sorgente_estratti": {"backend": n_backend, "frontend": n_frontend,
-                                           "composizione": n_composizione},
+                                           "composizione": n_composizione,
+                                           "migrazione_dati": n_script_dati},
                 "url_download": f"/api/v1/modernize/download/{session_id}/3",
             },
         )

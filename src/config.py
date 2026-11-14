@@ -31,9 +31,14 @@ FILE_FUNCTIONAL_DOC   = "3b_Functional_Documentation.md"
 FILE_DB_SCHEMA        = "3c_Database_Schema.sql"
 FILE_TEST_BOOK        = "4_Test_Book_Generation.md"
 FILE_MIGRATION_PLAN   = "5_Migration_Plan_ADR.md"
+# Regole di migrazione dei DATI (Fase 2): approvate al Check Point 2 insieme
+# all'architettura, prima che si scriva qualunque script.
+FILE_DATA_MIGRATION_PLAN = "5b_Data_Migration_Plan.md"
 FILE_BACKEND_IMPL     = "6a_Backend_Project_Implementation.md"
 FILE_FRONTEND_IMPL    = "6b_Frontend_Project_Implementation.md"
 FILE_COMPOSITION      = "6c_Solution_Composition.md"
+# Script Python di migrazione dei dati (Fase 3), scritti dal piano 5b.
+FILE_DATA_MIGRATION_SCRIPTS = "6d_Data_Migration_Scripts.md"
 FILE_QUALITY_REPORT   = "7_Quality_Check_Report.md"
 FILE_VALIDATION_FASE1 = "8_Validation_Report_Fase1.md"
 FILE_VALIDATION_FASE2 = "9_Validation_Report_Fase2.md"
@@ -348,6 +353,18 @@ COMPOSIZIONE_MAX_RIGHE_PER_FILE = 14         # dichiarazioni riportate per file
 COMPOSIZIONE_MAX_IMPORT_PER_PROGETTO = 60    # librerie importate, per progetto
 COMPOSIZIONE_MAX_CHARS_AVVIO = 8_000         # testo completo dei file di avvio
 COMPOSIZIONE_MAX_CHARS_ADR = 20_000          # estratto dell'ADR
+
+# --- Script di migrazione dei dati (Fase 3) -------------------------------
+# Gli script vivono in una cartella PROPRIA, fuori da src/backend e
+# src/frontend: sono uno strumento da eseguire una volta (o poche) per
+# spostare i dati, non una parte dell'applicazione, e sono sempre in Python
+# qualunque sia lo stack scelto, perche' esistono librerie per ogni database.
+CARTELLA_MIGRAZIONE_DATI = "migrazione_dati"
+# Tetti al contesto dell'agente che scrive gli script. Piano e schema target
+# sono la sua fonte primaria e hanno la quota maggiore.
+MIGRAZIONE_DATI_MAX_CHARS_PIANO = 120_000
+MIGRAZIONE_DATI_MAX_CHARS_SCHEMA = 80_000
+MIGRAZIONE_DATI_MAX_CHARS_LEGACY = 80_000
 
 # Numero massimo di PROGETTI attesi nella solution generata.
 # La Fase 3 migra un file legacy per volta e ogni passata tende a inventare

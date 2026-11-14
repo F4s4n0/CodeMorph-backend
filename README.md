@@ -7,12 +7,29 @@ Piattaforma agentica di migrazione software legacy (FastAPI + CrewAI + Supabase)
 | Fase | Endpoint | Descrizione |
 |------|----------|-------------|
 | 1 · Understanding | `POST /api/v1/modernize/understand` | Assessment, mappa dipendenze, documentazione, test book |
-| 2 · Design | `POST /api/v1/modernize/design` | Migration Plan, ADR, schema DB target |
-| 3 · Implementation | `POST /api/v1/modernize/implement` | Generazione codice backend/frontend + Quality Check |
+| 2 · Design | `POST /api/v1/modernize/design` | Migration Plan, ADR, schema DB target, piano di migrazione dei dati |
+| 3 · Implementation | `POST /api/v1/modernize/implement` | Generazione codice backend/frontend, script Python di migrazione dei dati + Quality Check |
 
 Tra una fase e l'altra ci sono i Checkpoint umani (HITL): download dei report
 (`GET /api/v1/modernize/download/{session_id}/{fase}`) e ri-upload dei file
 corretti (`POST /api/v1/modernize/upload/{session_id}`).
+
+## Migrazione dei dati
+
+Due agenti si occupano di spostare i dati esistenti nel nuovo database:
+
+- **Data Migration Analyst** (Fase 2, dopo il DBA) scrive `5b_Data_Migration_Plan.md`:
+  corrispondenze campo per campo, regole di trasformazione (codici `R-`),
+  anomalie attese nei dati (`Q-`), ordine di caricamento, verifiche di
+  riconciliazione (`V-`) e punti aperti (`P-`). Viene approvato al Check Point 2.
+- **Data Migration Engineer** (Fase 3, una volta per fase) traduce il piano in
+  script **Python** sotto `migrazione_dati/` (documento `6d_Data_Migration_Scripts.md`):
+  analisi dei dati, prova senza scrittura, caricamento rieseguibile, scarti in
+  CSV, verifiche e test. Gli script si rigenerano solo se il piano cambia.
+
+La pipeline vede gli schemi, non i dati reali: le anomalie sono ipotesi che
+`analisi_dati.py` verifica prima del caricamento. Gli script vanno provati su
+una copia del database di destinazione.
 
 ## Pagamenti: pass giornaliero (299 €) con PayPal e Google Pay
 

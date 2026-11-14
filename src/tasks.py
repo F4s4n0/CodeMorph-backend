@@ -17,7 +17,9 @@ from src.config import (
     FILE_DB_SCHEMA,
     FILE_TEST_BOOK,
     FILE_MIGRATION_PLAN,
+    FILE_DATA_MIGRATION_PLAN,
     FILE_QUALITY_REPORT,
+    CARTELLA_MIGRAZIONE_DATI,
     MERMAID_RULES,
 )
 
@@ -626,7 +628,110 @@ def get_design_tasks(agents, output_dir, contesto_fase1="", numero_file=0,
         output_file=f"{output_dir}/{FILE_DB_SCHEMA}",
     )
 
-    return [migration_plan_task, dba_task]
+    # Regole di migrazione dei DATI. Vengono DOPO lo schema perche' ne
+    # dipendono campo per campo, e PRIMA del Check Point 2 perche' sono una
+    # decisione da approvare quanto l'architettura: spostare i dati in modo
+    # sbagliato e' un danno che il codice corretto non ripara.
+    data_migration_task = Task(
+        description=(
+            "Lo schema del nuovo database e' stato appena progettato dal DBA "
+            "(lo ricevi come contesto, insieme al Migration Plan). Il tuo "
+            "compito e' stabilire COME i dati del sistema legacy arriveranno "
+            "in quelle tabelle. Il target tecnologico e': {linguaggio_target}.\n\n"
+            "NON riprogettare lo schema e NON scrivere codice: gli script li "
+            "scrivera' un collega in Fase 3, in Python, partendo SOLO da questo "
+            "documento. Le tue regole devono quindi essere abbastanza precise "
+            "da essere tradotte in codice senza dover indovinare.\n\n"
+            "Usa ESATTAMENTE i nomi di tabelle e colonne dello schema del DBA e "
+            "quelli delle strutture legacy che trovi nel codice. Se lo schema "
+            "non prevede una colonna per un dato legacy che ti sembra "
+            "importante, NON aggiungerla: segnalalo fra i punti aperti.\n\n"
+            "STRUTTURA OBBLIGATORIA DEL DOCUMENTO:\n"
+            "## 1. Perimetro\n"
+            "Le sorgenti dei dati legacy (per ciascuna: tecnologia, dove si "
+            "trova secondo il codice, tabelle o file coinvolti, encoding dei "
+            "testi se deducibile) e il database di destinazione.\n"
+            "## 2. Corrispondenze per tabella\n"
+            "Una sotto-sezione per OGNI tabella dello schema nuovo, con una "
+            "tabella Markdown: colonna target | origine (tabella.campo legacy, "
+            "oppure 'generata' o 'costante') | trasformazione in breve | "
+            "regola (codice). Ogni colonna del nuovo schema deve avere la sua "
+            "riga. Sotto la tabella, la chiave usata per riconoscere un record "
+            "gia' migrato (serve a rendere il caricamento rieseguibile).\n"
+            "## 3. Regole di trasformazione\n"
+            "Ogni regola ha un codice nella forma R-<tabella>-NN (ad esempio "
+            "R-clienti-03) e indica: valori in ingresso, trasformazione, "
+            "valore in uscita, casi limite. Scrivi le regole per esteso: "
+            "conversioni di tipo (date, numeri, memo, logici), decodifiche di "
+            "codici, nuove chiavi al posto di quelle legacy e tabella di "
+            "corrispondenza fra vecchie e nuove chiavi, fusioni e scissioni "
+            "di tabelle, campi calcolati, valori di default.\n"
+            "## 4. Qualita' dei dati\n"
+            "Le anomalie che i dati reali potrebbero contenere, ciascuna con "
+            "un codice Q-NN e una politica esplicita: scartare, correggere, "
+            "usare un valore di default o segnalare senza bloccare. Non hai i "
+            "dati: ricava le anomalie dal CODICE (campi non validati in "
+            "inserimento, date lasciabili vuote, codici scritti a mano senza "
+            "controllo sull'anagrafica, campi riusati per scopi diversi) e "
+            "dichiarale come IPOTESI da verificare con l'analisi dei dati.\n"
+            "## 5. Ordine di caricamento\n"
+            "Elenco numerato delle tabelle nell'ordine imposto dalle chiavi "
+            "esterne: prima le anagrafiche, poi chi le riferisce.\n"
+            "## 6. Verifiche di riconciliazione\n"
+            "Controlli con codice V-NN da eseguire a migrazione conclusa: "
+            "conteggi per tabella al netto degli scarti, somme di controllo su "
+            "importi e quantita', assenza di riferimenti orfani, confronto su "
+            "un campione di record. Per ciascuna, la condizione di successo.\n"
+            "## 7. Esecuzione\n"
+            "Come si esegue la migrazione: analisi preliminare dei dati, prova "
+            "senza scrittura, caricamento, verifiche; se va fatta in una volta "
+            "sola o in piu' passaggi; come si torna indietro se una verifica "
+            "fallisce; come si gestisce un secondo passaggio sugli stessi dati.\n"
+            "## 8. Tabelle legacy non migrate\n"
+            "Coerente con la mappa in testa allo schema del DBA: per ogni "
+            "struttura esclusa, il motivo.\n"
+            "## 9. Punti aperti\n"
+            "Le decisioni che spettano al cliente, con un codice P-NN: regole "
+            "che il codice non permette di stabilire, dati di cui non si "
+            "conosce la struttura (ad esempio tabelle su un database esterno "
+            "senza script dello schema), conflitti fra codice e schema nuovo. "
+            "Gli script li tratteranno come bloccanti: meglio una domanda "
+            "esplicita che una regola indovinata.\n\n"
+            "Se il sistema legacy NON ha dati persistenti da migrare, o lo "
+            "schema del DBA dichiara che non serve un database, scrivi solo il "
+            "paragrafo 1 con questa constatazione e concludi.\n\n"
+            "CODICE SORGENTE LEGACY (evidenza primaria):\n"
+            "Qui trovi gli schemi delle tabelle legacy e il codice che le "
+            "legge e le scrive: e' da li' che si capisce cosa contiene davvero "
+            "ogni campo. In caso di discrepanza con la documentazione fa fede "
+            "il codice.\n"
+            "{contesto_sorgenti}\n"
+            + blocco_contesto
+        ) + _nota_data(),
+        expected_output=(
+            "Un documento Markdown 'Data Migration Plan' con le nove sezioni "
+            "richieste, nell'ordine indicato. Ogni tabella dello schema nuovo "
+            "ha la sua tabella di corrispondenze, ogni colonna la sua riga, "
+            "ogni trasformazione non banale una regola R- con i casi limite. "
+            "Le regole e le verifiche hanno codici univoci, perche' gli script "
+            "li citeranno uno per uno. "
+            "AMPIEZZA: la misura sono le tabelle e le colonne dello schema "
+            "nuovo, non le pagine. Una colonna senza origine dichiarata e' un "
+            "dato che lo script non sapra' da dove prendere. "
+            "NON aggiungere metodologia generica di migrazione dati: tutto "
+            "deve riferirsi a tabelle e campi di QUESTO sistema. "
+            "COMPLETEZZA: non annunciare sezioni che non svilupperai e "
+            "concludi il testo prima di esaurire lo spazio disponibile; se lo "
+            "spazio non basta per tutte le tabelle, scrivi per prime le "
+            "corrispondenze di TUTTE le tabelle (sezione 2) e riduci il "
+            "dettaglio delle sezioni successive, dichiarandolo."
+        ),
+        agent=agents["data_migration_analyst"],
+        context=[migration_plan_task, dba_task],
+        output_file=f"{output_dir}/{FILE_DATA_MIGRATION_PLAN}",
+    )
+
+    return [migration_plan_task, dba_task, data_migration_task]
 
 
 # =====================================================================
@@ -1234,6 +1339,138 @@ def get_composition_task(
 
 
 # =====================================================================
+# SCRIPT DI MIGRAZIONE DEI DATI (Fase 3)
+# =====================================================================
+
+def get_data_migration_scripts_task(
+    agents,
+    piano_migrazione_dati,
+    schema_target,
+    strutture_legacy="",
+):
+    """
+    Task che traduce il Data Migration Plan approvato al Check Point 2 in
+    script Python eseguibili.
+
+    Gli script sono SEMPRE in Python, qualunque sia lo stack target: sono uno
+    strumento da eseguire per spostare i dati, non parte dell'applicazione, e
+    Python ha librerie per ogni database (SQLAlchemy per i relazionali,
+    dbfread per FoxPro/dBase). Vivono nella cartella CARTELLA_MIGRAZIONE_DATI,
+    separata dal codice applicativo.
+
+    La crew parte senza inputs: i testi entrano nella description cosi' come
+    sono (vedi nota in testa al modulo).
+    """
+    safe_piano = piano_migrazione_dati or ""
+    safe_schema = schema_target or "Nessuno schema disponibile."
+    safe_legacy = strutture_legacy or "(nessuna struttura legacy estratta: usa quanto riportato nel piano)"
+    radice = CARTELLA_MIGRAZIONE_DATI
+
+    task = Task(
+        description=(
+            "Devi scrivere gli script che migrano i DATI del sistema legacy nel "
+            "nuovo database, in PYTHON (3.11 o successivo), qualunque sia lo "
+            "stack dell'applicazione. Il codice applicativo e' gia' stato "
+            "generato e non ti riguarda.\n\n"
+            "PIANO DI MIGRAZIONE DEI DATI (approvato dal cliente al Check "
+            "Point 2: e' la tua specifica, non una proposta):\n"
+            f"\"\"\"\n{safe_piano}\n\"\"\"\n\n"
+            "SCHEMA DEL DATABASE DI DESTINAZIONE (DDL):\n"
+            f"\"\"\"\n{safe_schema}\n\"\"\"\n\n"
+            "STRUTTURE DEI DATI LEGACY (schemi estratti dai file originali):\n"
+            f"\"\"\"\n{safe_legacy}\n\"\"\"\n\n"
+            f"STRUTTURA OBBLIGATORIA, tutta sotto {radice}/:\n"
+            f"- {radice}/README.md — prerequisiti, configurazione, comandi "
+            "nell'ordine di esecuzione, come leggere scarti e verifiche, e la "
+            "sezione 'Punti aperti' con i codici P- del piano non risolti.\n"
+            f"- {radice}/requirements.txt — solo le librerie usate davvero, "
+            "con versione minima. SQLAlchemy 2 per i database relazionali, con "
+            "il driver adatto al database di destinazione e alle sorgenti "
+            "relazionali; dbfread per gli archivi DBF; altre librerie solo se "
+            "una sorgente lo richiede.\n"
+            f"- {radice}/.env.example — tutte le impostazioni lette dagli "
+            "script (stringhe di connessione, percorsi degli archivi, encoding "
+            "dei testi legacy, dimensione dei lotti) con valori segnaposto. "
+            "MAI credenziali, host o percorsi reali: gli script leggono tutto "
+            "da variabili d'ambiente.\n"
+            f"- {radice}/config.py — lettura e validazione della configurazione.\n"
+            f"- {radice}/sorgenti/ — un lettore per ogni tecnologia di "
+            "sorgente del piano, che restituisce i record come dizionari.\n"
+            f"- {radice}/trasformazioni/ — un modulo per ogni tabella di "
+            "destinazione. Ogni funzione implementa una o piu' regole del "
+            "piano e ne riporta il codice (R-, Q-) nel proprio commento di "
+            "documentazione. Le funzioni sono PURE (ricevono un record, "
+            "restituiscono il record trasformato o un esito di scarto con "
+            "motivo), cosi' si possono testare senza database.\n"
+            f"- {radice}/caricamento.py — scrittura nel database di "
+            "destinazione a lotti, una transazione per tabella, con la chiave "
+            "di riconoscimento del piano per rendere il caricamento "
+            "RIESEGUIBILE senza duplicati.\n"
+            f"- {radice}/analisi_dati.py — PRIMO passo: legge le sorgenti senza "
+            "scrivere nulla e verifica le ipotesi Q- del piano (quanti record "
+            "violano ciascuna), producendo un rapporto. E' il modo in cui le "
+            "ipotesi diventano fatti prima di toccare il database nuovo.\n"
+            f"- {radice}/migra.py — punto di ingresso: esegue le tabelle "
+            "nell'ordine di caricamento del piano; opzioni da riga di comando "
+            "per la prova senza scrittura, per limitare l'esecuzione a "
+            "tabelle indicate e per scegliere la cartella dei rapporti.\n"
+            f"- {radice}/verifiche.py — le verifiche di riconciliazione V- del "
+            "piano, ciascuna con esito superata o fallita; termina con codice "
+            "di uscita diverso da zero se una verifica fallisce.\n"
+            f"- {radice}/tests/ — test pytest delle funzioni di trasformazione, "
+            "con i casi limite indicati nelle regole del piano.\n\n"
+            "COMPORTAMENTI OBBLIGATORI:\n"
+            "- Ogni record scartato finisce in un file CSV per tabella con il "
+            "record originale, il codice della regola e il motivo. Nessun "
+            "record sparisce in silenzio.\n"
+            "- Le nuove chiavi generate vengono registrate in una tabella di "
+            "corrispondenza fra chiave legacy e chiave nuova, usata per "
+            "risolvere i riferimenti delle tabelle caricate dopo.\n"
+            "- Log su file e a video: tabella in lavorazione, letti, "
+            "caricati, scartati.\n"
+            "- Nessuna credenziale nel codice. Nessuna query composta "
+            "concatenando valori: solo parametri.\n"
+            "- Gli archivi legacy si aprono in SOLA LETTURA: gli script non "
+            "devono mai modificare le sorgenti.\n\n"
+            "PUNTI APERTI E LACUNE — mai indovinare:\n"
+            "- Se il piano lascia aperta una decisione (codici P-) che "
+            "riguarda una tabella, lo script di quella tabella deve FERMARSI "
+            "con un errore esplicito che cita il codice del punto aperto, e "
+            "il README lo elenca. Non inventare la regola mancante.\n"
+            "- Non lasciare funzioni vuote, segnaposto o commenti del tipo "
+            "'da completare': cio' che non puoi scrivere va nei Punti aperti "
+            "del README con il motivo.\n"
+            "- Usa ESATTAMENTE i nomi di tabelle e colonne dello schema di "
+            "destinazione e delle strutture legacy. Non inventare campi.\n"
+            "- Se il piano dichiara che non ci sono dati da migrare, produci "
+            "solo il README con questa constatazione.\n\n"
+            "FORMATO DI OUTPUT OBBLIGATORIO (ripetuto per ogni file):\n"
+            f"/// FILEPATH: {radice}/percorso/del/file\n"
+            "```\n"
+            "[contenuto del file]\n"
+            "```\n"
+            "Il percorso dopo /// FILEPATH: deve essere sempre RELATIVO, mai "
+            f"assoluto, mai contenente '..', e iniziare con {radice}/.\n"
+            "Dentro un file NON usare mai tre apici inversi consecutivi, "
+            "neppure nel README: chiuderebbero il blocco prima del tempo. Per "
+            "i comandi nel README usa righe rientrate di quattro spazi."
+        ) + _nota_data(),
+        expected_output=(
+            f"Gli script Python di migrazione dei dati sotto {radice}/, "
+            "ciascuno in un blocco nel formato /// FILEPATH richiesto: README, "
+            "requirements, configurazione di esempio, lettori delle sorgenti, "
+            "trasformazioni per tabella con i codici delle regole, "
+            "caricamento rieseguibile, analisi dei dati, punto di ingresso, "
+            "verifiche e test. Ogni tabella del piano ha la sua "
+            "trasformazione, oppure compare fra i Punti aperti del README con "
+            "il motivo. Nessun testo fuori dai blocchi."
+        ),
+        agent=agents["data_migration_engineer"],
+    )
+    return [task]
+
+
+# =====================================================================
 # validatore dei task
 # =====================================================================
 
@@ -1286,6 +1523,17 @@ def get_validation_task(agent, output_dir, nome_fase, output_filename):
             "   Segnala anche i file relegati in una sezione di raccolta finale "
             "senza collocazione tematica: sono citati ma non analizzati, "
             "spariscono dagli altri documenti e interrompono la tracciabilita'.\n"
+            "   Se fra i documenti c'e' un piano di migrazione dei dati, "
+            "verifica che ogni tabella dello schema nuovo abbia la sua tabella "
+            "di corrispondenze, che ogni colonna abbia un'origine dichiarata, "
+            "che le regole e le verifiche abbiano codici univoci e che le "
+            "tabelle legacy escluse coincidano con quelle della mappa del DBA. "
+            "Le anomalie dei dati devono essere dichiarate come ipotesi, "
+            "perche' nessuno ha visto i dati reali.\n"
+            "   Se fra i documenti ci sono script di migrazione dei dati, "
+            "verifica che ogni tabella del piano abbia la sua trasformazione "
+            "o compaia fra i punti aperti, che le trasformazioni citino i "
+            "codici delle regole e che non ci siano credenziali nel codice.\n"
             "   Se fra i documenti c'e' uno schema di database, verifica che "
             "contenga la MAPPA DI MIGRAZIONE DEI DATI e che ogni tabella legacy "
             "citata nell'analisi vi compaia — come migrata oppure come "
